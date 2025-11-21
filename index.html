@@ -1,0 +1,3495 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PianoRoll Studio | Professional Web MIDI Editor</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #121212;
+            color: #e0e0e0;
+            overflow: hidden;
+            user-select: none;
+        }
+        
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #1e1e1e; }
+        ::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #555; }
+
+        .piano-row {
+            position: absolute;
+            left: 0;
+            width: 100%;
+            box-sizing: border-box;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+        }
+
+        .key-base {
+            background: #fcfcfc;
+            width: 100%;
+            height: 100%;
+            position: absolute;
+            left: 0;
+            top: 0;
+            z-index: 1;
+            border-right: 1px solid #ccc;
+        }
+        .key-base:hover { background: #eee; }
+
+        .black-key {
+            position: absolute;
+            left: 0;
+            top: 2px;
+            height: calc(100% - 4px);
+            width: 60%;
+            background: linear-gradient(to bottom, #333, #000, #333);
+            z-index: 10;
+            border-radius: 0 3px 3px 0;
+            box-shadow: 2px 2px 3px rgba(0,0,0,0.6);
+            border: 1px solid #000;
+        }
+        .black-key:active {
+            background: #222;
+            width: 58%;
+        }
+
+        .key-divider {
+            position: absolute;
+            left: 0;
+            bottom: 0;
+            width: 100%;
+            height: 1px;
+            background: #999;
+            z-index: 5;
+        }
+        .key-divider-partial {
+            position: absolute;
+            right: 0;
+            width: 40%;
+            top: 50%;
+            height: 1px;
+            background: #ccc;
+            z-index: 5;
+        }
+
+        .key-label {
+            position: absolute;
+            right: 4px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #777;
+            z-index: 15;
+            pointer-events: none;
+            font-weight: bold;
+            font-size: 9px;
+        }
+
+        .piano-row.active .key-base { background: #4fd1c5 !important; }
+        .piano-row.active .black-key { background: #2c7a7b !important; }
+
+        #keys-viewport {
+            position: relative;
+            overflow: hidden;
+            flex: 1;
+            background: #1e1e1e;
+        }
+        
+        #keys-list {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+        }
+
+        .loader {
+            border: 3px solid #333;
+            border-top: 3px solid #4fd1c5;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        .selection-rect {
+            position: absolute;
+            background: rgba(45, 212, 191, 0.2);
+            border: 1px solid #2dd4bf;
+            display: none;
+            pointer-events: none;
+            z-index: 100;
+        }
+
+        #velocity-lane {
+            position: relative;
+            background: #18181b;
+            border-top: 1px solid #27272a;
+        }
+        #velocity-resize-handle {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            cursor: row-resize;
+            background: linear-gradient(to bottom, #27272a, transparent);
+            z-index: 10;
+        }
+        #velocity-canvas {
+            position: absolute;
+            left: 0;
+            top: 4px;
+            right: 0;
+            bottom: 0;
+        }
+
+        .metronome-led {
+            width: 10px;
+            height: 10px;
+            border-radius: 9999px;
+            background: #4b5563;
+            box-shadow: 0 0 0 rgba(45,212,191,0);
+            transition: background 0.1s ease, box-shadow 0.1s ease;
+        }
+        .metronome-led-active {
+            background: #2dd4bf;
+            box-shadow: 0 0 10px rgba(45,212,191,0.9);
+        }
+
+        @keyframes spin { 0%{transform:rotate(0deg)}100%{transform:rotate(360deg)} }
+    </style>
+</head>
+<body class="h-screen flex flex-col text-gray-300">
+
+<header class="h-14 bg-[#18181b] border-b border-[#27272a] flex items-center px-4 justify-between shrink-0 z-20">
+    <div class="flex items-center gap-6">
+        <div class="flex items-center gap-2">
+            <div class="w-6 h-6 bg-gradient-to-br from-teal-400 to-blue-500 rounded-md"></div>
+            <h1 class="font-bold text-white tracking-tight">PIANO<span class="text-teal-400">ROLL</span></h1>
+        </div>
+        <div class="h-6 w-px bg-[#333]"></div>
+        <div class="flex items-center gap-2">
+            <button id="btn-rewind" class="p-2 hover:text-white text-gray-400" title="Rewind (Home)">
+                <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z"/></svg>
+            </button>
+            <button id="btn-play" class="w-10 h-10 bg-[#27272a] hover:bg-[#3f3f46] rounded-full flex items-center justify-center text-white border border-[#3f3f46] shadow-lg" title="Play/Pause (Space)">
+                <svg id="icon-play" class="w-5 h-5 ml-0.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                <svg id="icon-pause" class="w-5 h-5 hidden" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+            </button>
+            <button id="btn-stop" class="p-2 hover:text-white text-gray-400" title="Stop">
+                <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg>
+            </button>
+        </div>
+        <div class="bg-black/30 px-3 py-1 rounded text-teal-400 font-mono text-sm border border-[#333]" id="time-display">
+            0:0:0
+        </div>
+    </div>
+
+    <div class="flex items-center gap-4">
+        <div class="flex items-center gap-2">
+            <span class="text-xs font-bold text-gray-500">BPM</span>
+            <input type="number" id="bpm-input" value="120" min="30" max="300"
+                   class="w-14 bg-[#27272a] border border-[#3f3f46] rounded px-2 py-0.5 text-sm text-center focus:outline-none focus:border-teal-500">
+        </div>
+
+        <button id="btn-metronome" class="flex items-center gap-2 text-xs text-gray-400 hover:text-teal-400 font-bold">
+            <span id="metronome-led" class="metronome-led"></span>
+            METRO
+        </button>
+
+        <div class="h-6 w-px bg-[#333]"></div>
+
+        <div class="flex gap-2">
+            <button id="tool-select" class="tool-btn active bg-teal-500/20 text-teal-400 border border-teal-500/50 px-3 py-1 rounded text-xs font-bold">SELECT</button>
+            <button id="tool-pencil" class="tool-btn hover:bg-[#27272a] text-gray-400 border border-transparent hover:border-[#3f3f46] px-3 py-1 rounded text-xs font-bold">PENCIL</button>
+            <button id="tool-eraser" class="tool-btn hover:bg-[#27272a] text-gray-400 border border-transparent hover:border-[#3f3f46] px-3 py-1 rounded text-xs font-bold">ERASER</button>
+        </div>
+
+        <div class="h-6 w-px bg-[#333]"></div>
+
+        <button id="btn-clear" class="text-xs text-red-400 hover:text-red-300 font-bold px-2">CLEAR</button>
+        <button id="btn-export" class="bg-[#27272a] hover:bg-[#3f3f46] text-white px-3 py-1.5 rounded text-xs font-bold border border-[#3f3f46]">EXPORT JSON</button>
+        <button id="btn-render" class="bg-gradient-to-r from-teal-600 to-teal-500 hover:from-teal-500 hover:to-teal-400 text-white px-3 py-1.5 rounded text-xs font-bold shadow-lg">RENDER WAV</button>
+    </div>
+</header>
+
+<div class="flex-1 flex overflow-hidden bg-[#121212]" id="workspace">
+    <div class="w-20 bg-[#1e1e1e] border-r border-[#333] flex flex-col shrink-0 relative overflow-hidden">
+        <div class="h-8 border-b border-[#333] bg-[#222] shrink-0"></div>
+        <div id="keys-viewport">
+            <div id="keys-list"></div>
+        </div>
+    </div>
+
+    <div class="flex-1 flex flex-col relative overflow-hidden" id="grid-wrapper">
+        <div class="h-8 bg-[#18181b] border-b border-[#333] relative overflow-hidden" id="ruler">
+            <canvas id="ruler-canvas" class="absolute top-0 left-0"></canvas>
+        </div>
+
+        <div class="flex-1 relative bg-[#121212]" id="grid-area">
+            <div id="scroll-container" class="absolute inset-0 overflow-auto">
+                <div id="piano-roll-content" class="relative"></div>
+            </div>
+            <canvas id="grid-canvas" class="absolute inset-0 z-0 pointer-events-none"></canvas>
+            <canvas id="notes-canvas" class="absolute inset-0 z-10 pointer-events-none"></canvas>
+            <div id="interaction-layer" class="absolute inset-0 z-20">
+                <div id="selection-rect" class="selection-rect"></div>
+            </div>
+            <div id="playhead" class="absolute top-0 bottom-0 w-0.5 bg-teal-400 z-30 pointer-events-none shadow-[0_0_10px_rgba(45,212,191,0.8)]">
+                <div class="w-3 h-3 -ml-1.5 bg-teal-400 rounded-full absolute -top-1.5"></div>
+            </div>
+        </div>
+
+        <div id="velocity-lane" class="h-28 shrink-0">
+            <div id="velocity-resize-handle"></div>
+            <canvas id="velocity-canvas"></canvas>
+        </div>
+    </div>
+
+    <div id="auto-panel" class="w-72 bg-[#020617] border-l border-[#27272a] flex flex-col shrink-0 text-xs p-3 gap-3">
+        <div class="flex items-center justify-between mb-1">
+            <span class="text-[10px] tracking-wide text-gray-400 font-semibold uppercase">Auto Compose</span>
+        </div>
+        <div class="space-y-3">
+            <div>
+                <label class="block text-[11px] text-gray-400 mb-1">Key</label>
+                <div class="flex gap-1">
+                    <select id="auto-key-root" class="flex-1 bg-[#030712] border border-[#27272a] rounded px-1 py-0.5">
+                        <option selected>C</option>
+                        <option>C#</option>
+                        <option>D</option>
+                        <option>D#</option>
+                        <option>E</option>
+                        <option>F</option>
+                        <option>F#</option>
+                        <option>G</option>
+                        <option>G#</option>
+                        <option>A</option>
+                        <option>A#</option>
+                        <option>B</option>
+                    </select>
+                    <select id="auto-key-mode" class="flex-1 bg-[#030712] border border-[#27272a] rounded px-1 py-0.5">
+                        <option value="major" selected>Major</option>
+                        <option value="minor">Minor</option>
+                    </select>
+                </div>
+            </div>
+
+            <div>
+                <label class="block text-[11px] text-gray-400 mb-1">Verse Chords</label>
+                <input id="auto-verse-chords" type="text" value="C | G | Am | F"
+                       class="w-full bg-[#030712] border border-[#27272a] rounded px-1 py-0.5 text-[11px]">
+                <p class="text-[10px] text-gray-500 mt-1">
+                    例：C | G | Am | F 或 I | V | vi | IV
+                </p>
+            </div>
+
+            <div>
+                <label class="block text-[11px] text-gray-400 mb-1">Chorus Chords</label>
+                <input id="auto-chorus-chords" type="text" value="C | Em | F | G"
+                       class="w-full bg-[#030712] border border-[#27272a] rounded px-1 py-0.5 text-[11px]">
+                <p class="text-[10px] text-gray-500 mt-1">
+                    例：C | Em | F | G 或 I | iii | IV | V
+                </p>
+            </div>
+
+            <div class="flex gap-2">
+                <div class="flex-1">
+                    <label class="block text-[11px] text-gray-400 mb-1">Hook Bars (motif)</label>
+                    <input id="auto-hook-bars" type="number" min="1" max="8" value="4"
+                           class="w-full bg-[#030712] border border-[#27272a] rounded px-1 py-0.5 text-[11px]">
+                </div>
+                <div class="flex-1">
+                    <label class="block text-[11px] text-gray-400 mb-1">Total Bars</label>
+                    <input id="auto-total-bars" type="number" min="8" max="180" value="90"
+                           class="w-full bg-[#030712] border border-[#27272a] rounded px-1 py-0.5 text-[11px]">
+                </div>
+            </div>
+
+            <div class="flex gap-2">
+                <div class="flex-1">
+                    <label class="block text-[11px] text-gray-400 mb-1">Density (Hooks)</label>
+                    <select id="auto-density" class="w-full bg-[#030712] border border-[#27272a] rounded px-1 py-0.5">
+                        <option value="sparse">Sparse</option>
+                        <option value="medium">Medium</option>
+                        <option value="dense" selected>Dense</option>
+                    </select>
+                </div>
+                <div class="flex-1">
+                    <label class="block text-[11px] text-gray-400 mb-1">Range (Chorus)</label>
+                    <select id="auto-range" class="w-full bg-[#030712] border border-[#27272a] rounded px-1 py-0.5">
+                        <option value="low">Low</option>
+                        <option value="mid" selected>Mid</option>
+                        <option value="high">High</option>
+                    </select>
+                </div>
+            </div>
+
+            <div>
+                <label class="block text-[11px] text-gray-400 mb-1">Arrangement</label>
+                <div class="space-y-1 text-[11px] text-gray-300">
+                    <label class="flex items-center gap-1">
+                        <input id="auto-gen-bass" type="checkbox" class="bg-transparent" checked>
+                        <span>Bass line</span>
+                    </label>
+                    <label class="flex items-center gap-1">
+                        <input id="auto-gen-chords" type="checkbox" class="bg-transparent" checked>
+                        <span>Pad / Arp chords</span>
+                    </label>
+                    <p class="text-[10px] text-gray-500">
+                        僅覆蓋自動生成的 auto_ 軌道（hook / bass / pad），不清除你手動畫的音符。
+                    </p>
+                </div>
+            </div>
+
+            <div class="flex gap-2">
+                <button id="btn-auto-random"
+                        class="flex-1 py-1.5 bg-[#111827] hover:bg-[#1f2937] text-gray-200 font-bold rounded text-[11px] border border-[#27272a]">
+                    Randomize Settings
+                </button>
+                <button id="btn-auto-generate"
+                        class="flex-1 py-1.5 bg-teal-600 hover:bg-teal-500 text-white font-bold rounded text-[11px]">
+                    Generate Song
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="loading-overlay" class="fixed inset-0 z-50 bg-[#09090b] flex flex-col items-center justify-center gap-4">
+    <h2 class="text-2xl font-bold text-white tracking-wider">PIANO<span class="text-teal-500">ROLL</span> STUDIO</h2>
+    <div class="flex items-center gap-3 text-gray-400">
+        <div class="loader"></div>
+        <span id="loading-text">Loading High-Res Piano Samples...</span>
+    </div>
+</div>
+
+<div id="start-overlay" class="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center hidden">
+    <div class="bg-[#18181b] border border-[#333] p-8 rounded-xl shadow-2xl max-w-lg text-center space-y-6">
+        <div class="w-16 h-16 bg-teal-500/10 rounded-full flex items-center justify-center mx-auto text-teal-400">
+            <svg class="w-8 h-8" fill="currentColor" viewBox="0 0 24 24"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>
+        </div>
+        <div>
+            <h2 class="text-3xl font-bold text-white mb-2">Ready to Compose?</h2>
+            <p class="text-gray-400">Click below to initialize the audio engine and start creating.</p>
+        </div>
+        <button id="init-btn" class="w-full py-3 bg-teal-600 hover:bg-teal-500 text-white font-bold rounded-lg">ENTER STUDIO</button>
+        <p class="text-xs text-gray-500">Tip: Space = Play / Stop, Delete = remove notes.</p>
+    </div>
+</div>
+
+<script>
+    const CONFIG = {
+        rowHeight: 24,
+        beatWidth: 80,
+        octaves: 8,
+        startOctave: 1,
+        totalMeasures: 90,
+        zoom: {
+            minBeatWidth: 20,
+            maxBeatWidth: 200,
+            minRowHeight: 12,
+            maxRowHeight: 40
+        },
+        colors: {
+            bg: '#121212',
+            gridMain: '#2a2a2a',
+            gridSub: '#1e1e1e',
+            blackKeyRow: '#161616',
+            note: '#2dd4bf',
+            noteSelected: '#f0fdf4',
+            noteBorder: '#115e59'
+        }
+    };
+
+    const ORNAMENT_NOTE_DURATION = 0.125; // 1/8 beat 統一裝飾音長
+    const MELODY_STYLES = ['smooth', 'hooky', 'leapy'];
+
+    const totalKeys = CONFIG.octaves * 12;
+    let totalWidth = CONFIG.totalMeasures * 4 * CONFIG.beatWidth;
+    let totalHeight = totalKeys * CONFIG.rowHeight;
+
+    const STATE = {
+        notes: [],
+        isPlaying: false,
+        bpm: 120,
+        currentTool: 'select',
+        snapToGrid: 0.25,
+        selectedNotes: new Set(),
+        isDragging: false,
+        isSelecting: false,
+        dragAction: null,
+        dragStart: { x: 0, y: 0, vx: 0, vy: 0, screenX: 0, screenY: 0 },
+        hoverNote: null,
+        dragStartNotes: {},
+        selectionStartState: null,
+        pianoLoaded: false,
+        hasPendingHistorySnapshot: false,
+        lastPointerBeat: null,
+        lastPointerRow: null,
+        currentBeat: 0,
+        clipboard: null,
+        metronomeEnabled: false,
+        velocityLaneHeight: 112
+    };
+
+    const HISTORY = {
+        undoStack: [],
+        redoStack: [],
+        maxLength: 200,
+        isRestoring: false
+    };
+
+    const els = {
+        scrollContainer: document.getElementById('scroll-container'),
+        gridArea: document.getElementById('grid-area'),
+        selectionRect: document.getElementById('selection-rect'),
+        content: document.getElementById('piano-roll-content'),
+        keysList: document.getElementById('keys-list'),
+        gridCanvas: document.getElementById('grid-canvas'),
+        notesCanvas: document.getElementById('notes-canvas'),
+        rulerCanvas: document.getElementById('ruler-canvas'),
+        interaction: document.getElementById('interaction-layer'),
+        playhead: document.getElementById('playhead'),
+        timeDisplay: document.getElementById('time-display'),
+        bpmInput: document.getElementById('bpm-input'),
+        btnPlay: document.getElementById('btn-play'),
+        btnStop: document.getElementById('btn-stop'),
+        btnRewind: document.getElementById('btn-rewind'),
+        btnExport: document.getElementById('btn-export'),
+        btnClear: document.getElementById('btn-clear'),
+        iconPlay: document.getElementById('icon-play'),
+        iconPause: document.getElementById('icon-pause'),
+        loading: document.getElementById('loading-overlay'),
+        startOverlay: document.getElementById('start-overlay'),
+        velocityLane: document.getElementById('velocity-lane'),
+        velocityCanvas: document.getElementById('velocity-canvas'),
+        velocityResize: document.getElementById('velocity-resize-handle'),
+        btnMetronome: document.getElementById('btn-metronome'),
+        metronomeLed: document.getElementById('metronome-led')
+    };
+
+    const autoEls = {
+        keyRoot: document.getElementById('auto-key-root'),
+        keyMode: document.getElementById('auto-key-mode'),
+        verseChords: document.getElementById('auto-verse-chords'),
+        chorusChords: document.getElementById('auto-chorus-chords'),
+        hookBars: document.getElementById('auto-hook-bars'),
+        totalBars: document.getElementById('auto-total-bars'),
+        density: document.getElementById('auto-density'),
+        range: document.getElementById('auto-range'),
+        genBass: document.getElementById('auto-gen-bass'),
+        genChords: document.getElementById('auto-gen-chords'),
+        generateBtn: document.getElementById('btn-auto-generate'),
+        randomBtn: document.getElementById('btn-auto-random')
+    };
+
+    const NOTE_TO_SEMITONE = {
+        'C': 0, 'C#': 1, 'DB': 1, 'D': 2, 'D#': 3, 'EB': 3,
+        'E': 4, 'F': 5, 'F#': 6, 'GB': 6, 'G': 7, 'G#': 8, 'AB': 8,
+        'A': 9, 'A#': 10, 'BB': 10, 'B': 11
+    };
+    const PC_TO_NOTE = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+
+    const DEFAULT_VERSE_PROGRESS = "C | G | Am | F";
+    const DEFAULT_CHORUS_PROGRESS = "C | Em | F | G";
+
+    let pianoSampler;
+    let metronomeSynth;
+    let metronomeId = null;
+    let mainPart = null;
+
+    async function initAudio() {
+        await Tone.start();
+        Tone.Transport.bpm.value = STATE.bpm;
+
+        pianoSampler = new Tone.Sampler({
+            urls: {
+                A0: "A0.mp3", C1: "C1.mp3", "D#1": "Ds1.mp3", "F#1": "Fs1.mp3", A1: "A1.mp3",
+                C2: "C2.mp3", "D#2": "Ds2.mp3", "F#2": "Fs2.mp3", A2: "A2.mp3",
+                C3: "C3.mp3", "D#3": "Ds3.mp3", "F#3": "Fs3.mp3", A3: "A3.mp3",
+                C4: "C4.mp3", "D#4": "Ds4.mp3", "F#4": "Fs4.mp3", A4: "A4.mp3",
+                C5: "C5.mp3", "D#5": "Ds5.mp3", "F#5": "Fs5.mp3", A5: "A5.mp3",
+                C6: "C6.mp3", "D#6": "Ds6.mp3", "F#6": "Fs6.mp3", A6: "A6.mp3",
+                C7: "C7.mp3", "D#7": "Ds7.mp3", "F#7": "Fs7.mp3", A7: "A7.mp3",
+                C8: "C8.mp3"
+            },
+            release: 1,
+            curve: 'exponential',
+            volume: -5,
+            baseUrl: "https://tonejs.github.io/audio/salamander/"
+        }).toDestination();
+
+        metronomeSynth = new Tone.MembraneSynth({
+            envelope: { attack: 0.001, decay: 0.1, sustain: 0.0, release: 0.05 }
+        }).toDestination();
+
+        await Tone.loaded();
+        STATE.pianoLoaded = true;
+    }
+
+    function recalcWorldDimensions() {
+        totalWidth = CONFIG.totalMeasures * 4 * CONFIG.beatWidth;
+        totalHeight = totalKeys * CONFIG.rowHeight;
+        els.content.style.width = `${totalWidth}px`;
+        els.content.style.height = `${totalHeight}px`;
+        els.keysList.style.height = `${totalHeight}px`;
+    }
+
+    function getMidiFromRow(row) {
+        return ((CONFIG.startOctave + CONFIG.octaves) * 12) - row;
+    }
+    function getRowFromMidi(midi) {
+        const row = ((CONFIG.startOctave + CONFIG.octaves) * 12) - midi;
+        return Math.max(0, Math.min(totalKeys - 1, row));
+    }
+    function getNoteName(midi) {
+        return Tone.Frequency(midi, "midi").toNote();
+    }
+
+    function initUI() {
+        recalcWorldDimensions();
+        resizeOverlayCanvases();
+        generateKeys();
+        drawGrid();
+        drawNotes();
+        drawVelocityLane();
+        renderRuler();
+
+        const c4Midi = 60;
+        const topNoteMidi = (CONFIG.startOctave + CONFIG.octaves) * 12;
+        const c4RowIndex = topNoteMidi - c4Midi;
+        const scrollY = c4RowIndex * CONFIG.rowHeight;
+        els.scrollContainer.scrollTop = scrollY - els.scrollContainer.offsetHeight / 2;
+
+        els.loading.classList.add('hidden');
+        captureHistorySnapshot();
+    }
+
+    function resizeOverlayCanvases() {
+        const rect = els.gridArea.getBoundingClientRect();
+        const w = rect.width;
+        const h = rect.height;
+        const dpr = window.devicePixelRatio || 1;
+
+        [els.gridCanvas, els.notesCanvas].forEach(c => {
+            c.width = w * dpr;
+            c.height = h * dpr;
+            c.style.width = w + 'px';
+            c.style.height = h + 'px';
+        });
+
+        els.interaction.style.width = w + 'px';
+        els.interaction.style.height = h + 'px';
+
+        const vRect = els.velocityLane.getBoundingClientRect();
+        els.velocityCanvas.width = vRect.width * dpr;
+        els.velocityCanvas.height = (vRect.height - 4) * dpr;
+        els.velocityCanvas.style.width = vRect.width + 'px';
+        els.velocityCanvas.style.height = (vRect.height - 4) + 'px';
+
+        renderAll();
+    }
+
+    function generateKeys() {
+        els.keysList.innerHTML = '';
+        for (let i = 0; i < totalKeys; i++) {
+            const midi = getMidiFromRow(i);
+            const noteName = getNoteName(midi);
+            const isBlack = noteName.includes('#');
+
+            const row = document.createElement('div');
+            row.className = 'piano-row';
+            row.style.height = `${CONFIG.rowHeight}px`;
+            row.style.top = `${i * CONFIG.rowHeight}px`;
+            row.dataset.midi = midi;
+
+            const base = document.createElement('div');
+            base.className = 'key-base';
+            row.appendChild(base);
+
+            if (isBlack) {
+                const bk = document.createElement('div');
+                bk.className = 'black-key';
+                row.appendChild(bk);
+
+                const partialDiv = document.createElement('div');
+                partialDiv.className = 'key-divider-partial';
+                row.appendChild(partialDiv);
+            }
+
+            if (!isBlack) {
+                if (i < totalKeys - 1) {
+                    const nextMidi = getMidiFromRow(i + 1);
+                    const nextName = getNoteName(nextMidi);
+                    const nextIsBlack = nextName.includes('#');
+                    if (!nextIsBlack) {
+                        const div = document.createElement('div');
+                        div.className = 'key-divider';
+                        row.appendChild(div);
+                    }
+                } else {
+                    const div = document.createElement('div');
+                    div.className = 'key-divider';
+                    row.appendChild(div);
+                }
+
+                if (noteName.startsWith('C') && !noteName.includes('#')) {
+                    const lbl = document.createElement('div');
+                    lbl.className = 'key-label';
+                    lbl.innerText = noteName;
+                    row.appendChild(lbl);
+                }
+            }
+
+            row.onmousedown = () => playNotePreview(midi);
+            els.keysList.appendChild(row);
+        }
+    }
+
+    function playNotePreview(midi, duration = '8n') {
+        if (STATE.pianoLoaded && pianoSampler) {
+            pianoSampler.triggerAttackRelease(getNoteName(midi), duration);
+        }
+    }
+
+    function getViewportInfo() {
+        const scrollLeft = els.scrollContainer.scrollLeft;
+        const scrollTop = els.scrollContainer.scrollTop;
+        const w = els.gridArea.clientWidth;
+        const h = els.gridArea.clientHeight;
+        return { scrollLeft, scrollTop, w, h };
+    }
+
+    function drawGrid() {
+        const ctx = els.gridCanvas.getContext('2d');
+        const { scrollLeft, scrollTop, w, h } = getViewportInfo();
+        const dpr = window.devicePixelRatio || 1;
+        els.gridCanvas.width = w * dpr;
+        els.gridCanvas.height = h * dpr;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+        ctx.fillStyle = CONFIG.colors.bg;
+        ctx.fillRect(0, 0, w, h);
+
+        const paddingRows = 2;
+        const paddingBeats = 4;
+        const firstRow = Math.max(0, Math.floor(scrollTop / CONFIG.rowHeight) - paddingRows);
+        const lastRow = Math.min(totalKeys - 1, Math.ceil((scrollTop + h) / CONFIG.rowHeight) + paddingRows);
+
+        const totalBeats = CONFIG.totalMeasures * 4;
+        const firstBeat = Math.max(0, Math.floor(scrollLeft / CONFIG.beatWidth) - paddingBeats);
+        const lastBeat = Math.min(totalBeats, Math.ceil((scrollLeft + w) / CONFIG.beatWidth) + paddingBeats);
+
+        for (let row = firstRow; row <= lastRow; row++) {
+            const midi = getMidiFromRow(row);
+            const isBlack = getNoteName(midi).includes('#');
+            const yWorld = row * CONFIG.rowHeight;
+            const y = yWorld - scrollTop;
+
+            if (isBlack) {
+                ctx.fillStyle = CONFIG.colors.blackKeyRow;
+                ctx.fillRect(0, y, w, CONFIG.rowHeight);
+            }
+
+            ctx.strokeStyle = CONFIG.colors.gridSub;
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(w, y);
+            ctx.stroke();
+        }
+
+        for (let beat = firstBeat; beat <= lastBeat; beat++) {
+            const xWorld = beat * CONFIG.beatWidth;
+            const x = xWorld - scrollLeft;
+            const isMeasure = beat % 4 === 0;
+            ctx.strokeStyle = isMeasure ? CONFIG.colors.gridMain : CONFIG.colors.gridSub;
+            ctx.lineWidth = isMeasure ? 1 : 0.5;
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, h);
+            ctx.stroke();
+        }
+    }
+
+    function hexToRgba(hex, alpha) {
+        const c = hex.replace('#', '');
+        const num = parseInt(c, 16);
+        const r = (num >> 16) & 255;
+        const g = (num >> 8) & 255;
+        const b = num & 255;
+        return `rgba(${r},${g},${b},${alpha})`;
+    }
+
+    function drawNotes() {
+        const ctx = els.notesCanvas.getContext('2d');
+        const { scrollLeft, scrollTop, w, h } = getViewportInfo();
+        const dpr = window.devicePixelRatio || 1;
+        els.notesCanvas.width = w * dpr;
+        els.notesCanvas.height = h * dpr;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, w, h);
+
+        const paddingX = CONFIG.beatWidth * 2;
+        const paddingY = CONFIG.rowHeight * 2;
+        const left = scrollLeft - paddingX;
+        const right = scrollLeft + w + paddingX;
+        const top = scrollTop - paddingY;
+        const bottom = scrollTop + h + paddingY;
+
+        STATE.notes.forEach(note => {
+            const xWorld = note.start * CONFIG.beatWidth;
+            const yWorld = note.row * CONFIG.rowHeight;
+            const wWorld = note.duration * CONFIG.beatWidth;
+            const hWorld = CONFIG.rowHeight;
+
+            if (xWorld + wWorld < left || xWorld > right || yWorld + hWorld < top || yWorld > bottom) return;
+
+            const x = xWorld - scrollLeft;
+            const y = yWorld - scrollTop;
+            const isSelected = STATE.selectedNotes.has(note.id);
+
+            if (isSelected) {
+                ctx.shadowColor = CONFIG.colors.note;
+                ctx.shadowBlur = 10;
+            } else {
+                ctx.shadowBlur = 0;
+            }
+
+            const base = isSelected ? CONFIG.colors.noteSelected : CONFIG.colors.note;
+            const alpha = 0.5 + (note.velocity || 0.8) * 0.5;
+            ctx.fillStyle = hexToRgba(base, alpha);
+            ctx.strokeStyle = CONFIG.colors.noteBorder;
+            ctx.lineWidth = 1;
+
+            ctx.fillRect(x + 1, y + 1, wWorld - 2, hWorld - 2);
+            ctx.strokeRect(x + 1, y + 1, wWorld - 2, hWorld - 2);
+
+            ctx.fillStyle = 'rgba(0,0,0,0.25)';
+            ctx.fillRect(x + wWorld - 5, y + 1, 4, hWorld - 2);
+        });
+    }
+
+    function drawVelocityLane() {
+        const ctx = els.velocityCanvas.getContext('2d');
+        const dpr = window.devicePixelRatio || 1;
+        const vRect = els.velocityLane.getBoundingClientRect();
+        const height = vRect.height - 4;
+        const width = vRect.width;
+        els.velocityCanvas.width = width * dpr;
+        els.velocityCanvas.height = height * dpr;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, width, height);
+
+        ctx.fillStyle = '#111827';
+        ctx.fillRect(0, 0, width, height);
+        ctx.strokeStyle = '#1f2933';
+        ctx.beginPath();
+        ctx.moveTo(0, height * 0.5);
+        ctx.lineTo(width, height * 0.5);
+        ctx.stroke();
+
+        const { scrollLeft } = getViewportInfo();
+        const paddingX = CONFIG.beatWidth * 2;
+        const left = scrollLeft - paddingX;
+        const right = scrollLeft + width + paddingX;
+
+        STATE.notes.forEach(note => {
+            const xWorld = note.start * CONFIG.beatWidth;
+            const wWorld = note.duration * CONFIG.beatWidth;
+            const centerWorld = xWorld + wWorld / 2;
+            if (centerWorld < left || centerWorld > right) return;
+
+            const x = centerWorld - scrollLeft;
+            const barW = Math.max(3, Math.min(12, wWorld * 0.3));
+            const velocity = note.velocity != null ? note.velocity : 0.8;
+            const barH = velocity * (height - 8);
+            const y = height - barH;
+
+            const isSelected = STATE.selectedNotes.has(note.id);
+            ctx.fillStyle = isSelected ? '#fbbf24' : '#22c55e';
+            ctx.fillRect(x - barW / 2, y, barW, barH);
+        });
+    }
+
+    function velocityFromY(y, height) {
+        const v = 1 - (y / height);
+        return Math.min(1, Math.max(0, v));
+    }
+
+    let velocityEditState = {
+        active: false,
+        noteIds: []
+    };
+
+    els.velocityCanvas.addEventListener('mousedown', (e) => {
+        const rect = els.velocityCanvas.getBoundingClientRect();
+        const xView = e.clientX - rect.left;
+        const yView = e.clientY - rect.top;
+        const { scrollLeft } = getViewportInfo();
+        const worldX = xView + scrollLeft;
+        const worldBeat = worldX / CONFIG.beatWidth;
+
+        let targetIds = [];
+
+        if (STATE.selectedNotes.size > 0) {
+            STATE.notes.forEach(n => {
+                if (!STATE.selectedNotes.has(n.id)) return;
+                if (worldBeat >= n.start && worldBeat <= n.start + n.duration) {
+                    targetIds.push(n.id);
+                }
+            });
+        }
+
+        if (targetIds.length === 0) {
+            const targetNote = findNoteForVelocityEdit(worldBeat);
+            if (!targetNote) return;
+            targetIds = [targetNote.id];
+        }
+
+        velocityEditState.active = true;
+        velocityEditState.noteIds = targetIds;
+
+        const height = rect.height;
+        const v = velocityFromY(yView, height);
+        targetIds.forEach(id => {
+            const note = STATE.notes.find(n => n.id === id);
+            if (note) note.velocity = v;
+        });
+
+        STATE.hasPendingHistorySnapshot = true;
+        drawNotes();
+        drawVelocityLane();
+        syncTransport();
+    });
+
+    function findNoteForVelocityEdit(worldBeat) {
+        const { scrollLeft } = getViewportInfo();
+        const width = els.velocityCanvas.clientWidth;
+        const left = scrollLeft;
+        const right = scrollLeft + width;
+
+        const hits = STATE.notes
+            .map(n => {
+                const xWorld = n.start * CONFIG.beatWidth;
+                const wWorld = n.duration * CONFIG.beatWidth;
+                const centerWorld = xWorld + wWorld / 2;
+                return { note: n, centerWorld };
+            })
+            .filter(({ centerWorld }) => centerWorld >= left && centerWorld <= right)
+            .map(({ note, centerWorld }) => ({
+                note,
+                dist: Math.abs(centerWorld / CONFIG.beatWidth - worldBeat)
+            }))
+            .sort((a, b) => a.dist - b.dist);
+
+        return hits.length > 0 ? hits[0].note : null;
+    }
+
+    function renderRuler() {
+        const ctx = els.rulerCanvas.getContext('2d');
+        const { scrollLeft, w } = getViewportInfo();
+        els.rulerCanvas.width = w;
+        els.rulerCanvas.height = 32;
+
+        ctx.fillStyle = '#18181b';
+        ctx.fillRect(0, 0, w, 32);
+        ctx.fillStyle = '#888';
+        ctx.font = '10px sans-serif';
+
+        const startBeat = Math.floor(scrollLeft / CONFIG.beatWidth);
+        const endBeat = startBeat + Math.ceil(w / CONFIG.beatWidth) + 1;
+
+        for (let i = startBeat; i < endBeat; i++) {
+            const x = (i * CONFIG.beatWidth) - scrollLeft;
+            if (x < -50) continue;
+            if (i % 4 === 0) {
+                ctx.fillRect(x, 15, 1, 17);
+                ctx.fillText((i / 4) + 1, x + 4, 28);
+            } else {
+                ctx.fillRect(x, 25, 1, 7);
+            }
+        }
+    }
+
+    function getGridPos(e) {
+        const rect = els.interaction.getBoundingClientRect();
+        const vx = e.clientX - rect.left;
+        const vy = e.clientY - rect.top;
+        const { scrollLeft, scrollTop } = getViewportInfo();
+        const x = vx + scrollLeft;
+        const y = vy + scrollTop;
+        return { x, y, vx, vy };
+    }
+
+    function getNoteAtPos(xWorld, yWorld) {
+        for (let i = STATE.notes.length - 1; i >= 0; i--) {
+            const n = STATE.notes[i];
+            const nx = n.start * CONFIG.beatWidth;
+            const ny = n.row * CONFIG.rowHeight;
+            const nw = n.duration * CONFIG.beatWidth;
+            const nh = CONFIG.rowHeight;
+            if (xWorld >= nx && xWorld <= nx + nw && yWorld >= ny && yWorld <= ny + nh) {
+                const isResize = xWorld >= nx + nw - 10;
+                return { note: n, isResize };
+            }
+        }
+        return null;
+    }
+
+    els.interaction.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
+        const { x, y, vx, vy } = getGridPos(e);
+        STATE.dragStart = { x, y, vx, vy, screenX: e.clientX, screenY: e.clientY };
+        STATE.lastPointerBeat = x / CONFIG.beatWidth;
+        STATE.lastPointerRow = y / CONFIG.rowHeight;
+
+        const hit = getNoteAtPos(x, y);
+
+        if (STATE.currentTool === 'eraser') {
+            if (hit) {
+                deleteNote(hit.note.id);
+                STATE.hasPendingHistorySnapshot = true;
+                captureHistorySnapshot();
+            }
+            return;
+        }
+
+        if (hit) {
+            if (STATE.currentTool === 'select' || STATE.currentTool === 'pencil') {
+                if (e.shiftKey) {
+                    STATE.selectedNotes.add(hit.note.id);
+                } else {
+                    if (!STATE.selectedNotes.has(hit.note.id)) {
+                        STATE.selectedNotes.clear();
+                        STATE.selectedNotes.add(hit.note.id);
+                    }
+                }
+                drawNotes();
+
+                STATE.isDragging = true;
+                STATE.hoverNote = hit.note;
+                STATE.dragStartNotes = {};
+                STATE.selectedNotes.forEach(id => {
+                    const n = STATE.notes.find(note => note.id === id);
+                    if (n) STATE.dragStartNotes[id] = { ...n };
+                });
+                STATE.dragAction = hit.isResize ? 'resize-end' : 'move';
+
+                if (!hit.isResize) playNotePreview(getMidiFromRow(hit.note.row));
+            }
+        } else {
+            if (STATE.currentTool === 'pencil') {
+                const startBeat = snapBeat(x / CONFIG.beatWidth);
+                const row = Math.floor(y / CONFIG.rowHeight);
+                const newNote = {
+                    id: generateNoteId(),
+                    row,
+                    start: startBeat,
+                    duration: 1,
+                    velocity: 0.8
+                };
+                STATE.notes.push(newNote);
+                STATE.selectedNotes.clear();
+                STATE.selectedNotes.add(newNote.id);
+                STATE.hoverNote = newNote;
+                STATE.dragStartNotes = { [newNote.id]: { ...newNote } };
+                STATE.isDragging = true;
+                STATE.dragAction = 'resize-end';
+                STATE.hasPendingHistorySnapshot = true;
+                playNotePreview(getMidiFromRow(row));
+                drawNotes();
+                drawVelocityLane();
+                syncTransport();
+            } else if (STATE.currentTool === 'select') {
+                STATE.isSelecting = true;
+                if (!e.shiftKey) STATE.selectedNotes.clear();
+                STATE.selectionStartState = new Set(STATE.selectedNotes);
+                els.selectionRect.style.display = 'block';
+                els.selectionRect.style.left = vx + 'px';
+                els.selectionRect.style.top = vy + 'px';
+                els.selectionRect.style.width = '0px';
+                els.selectionRect.style.height = '0px';
+            }
+        }
+    });
+
+    function handleGridMouseMove(e) {
+        const { x, y, vx, vy } = getGridPos(e);
+        STATE.lastPointerBeat = x / CONFIG.beatWidth;
+        STATE.lastPointerRow = y / CONFIG.rowHeight;
+
+        if (STATE.isSelecting) {
+            const startVX = Math.min(vx, STATE.dragStart.vx);
+            const startVY = Math.min(vy, STATE.dragStart.vy);
+            const width = Math.abs(vx - STATE.dragStart.vx);
+            const height = Math.abs(vy - STATE.dragStart.vy);
+            els.selectionRect.style.left = startVX + 'px';
+            els.selectionRect.style.top = startVY + 'px';
+            els.selectionRect.style.width = width + 'px';
+            els.selectionRect.style.height = height + 'px';
+
+            const { scrollLeft, scrollTop } = getViewportInfo();
+            const leftWorld = startVX + scrollLeft;
+            const rightWorld = leftWorld + width;
+            const topWorld = startVY + scrollTop;
+            const bottomWorld = topWorld + height;
+            const newSelection = new Set(STATE.selectionStartState);
+
+            STATE.notes.forEach(n => {
+                const nx = n.start * CONFIG.beatWidth;
+                const ny = n.row * CONFIG.rowHeight;
+                const nw = n.duration * CONFIG.beatWidth;
+                const nh = CONFIG.rowHeight;
+                if (leftWorld < nx + nw && rightWorld > nx && topWorld < ny + nh && bottomWorld > ny) {
+                    newSelection.add(n.id);
+                }
+            });
+
+            STATE.selectedNotes = newSelection;
+            drawNotes();
+            return;
+        }
+
+        if (!STATE.isDragging) {
+            const hit = getNoteAtPos(x, y);
+            if (hit) {
+                els.interaction.style.cursor = hit.isResize ? 'ew-resize' : 'move';
+            } else {
+                els.interaction.style.cursor = STATE.currentTool === 'pencil' ? 'crosshair' : 'default';
+            }
+            return;
+        }
+
+        const dx = e.clientX - STATE.dragStart.screenX;
+        const dy = e.clientY - STATE.dragStart.screenY;
+
+        if (STATE.dragAction === 'move') {
+            const snapW = CONFIG.beatWidth * STATE.snapToGrid;
+            const beatDelta = Math.round(dx / snapW) * STATE.snapToGrid;
+            const rowDelta = Math.round(dy / CONFIG.rowHeight);
+
+            STATE.selectedNotes.forEach(id => {
+                const startState = STATE.dragStartNotes[id];
+                if (!startState) return;
+                const note = STATE.notes.find(n => n.id === id);
+                if (!note) return;
+                const newStart = Math.max(0, startState.start + beatDelta);
+                const newRow = startState.row + rowDelta;
+                if (newRow >= 0 && newRow < totalKeys) note.row = newRow;
+                note.start = newStart;
+            });
+            STATE.hasPendingHistorySnapshot = true;
+            drawNotes();
+            drawVelocityLane();
+        } else if (STATE.dragAction === 'resize-end') {
+            const beatDelta = Math.round((dx / CONFIG.beatWidth) / STATE.snapToGrid) * STATE.snapToGrid;
+            STATE.selectedNotes.forEach(id => {
+                const startState = STATE.dragStartNotes[id];
+                if (!startState) return;
+                const note = STATE.notes.find(n => n.id === id);
+                if (note) note.duration = Math.max(STATE.snapToGrid, startState.duration + beatDelta);
+            });
+            STATE.hasPendingHistorySnapshot = true;
+            drawNotes();
+            drawVelocityLane();
+        }
+    }
+
+    function handleGridMouseUp() {
+        if (STATE.isSelecting) {
+            STATE.isSelecting = false;
+            els.selectionRect.style.display = 'none';
+        }
+        if (STATE.isDragging) {
+            STATE.isDragging = false;
+            STATE.dragAction = null;
+            STATE.hoverNote = null;
+            STATE.dragStartNotes = {};
+            syncTransport();
+            if (STATE.hasPendingHistorySnapshot) {
+                captureHistorySnapshot();
+                STATE.hasPendingHistorySnapshot = false;
+            }
+        }
+    }
+
+    window.addEventListener('mousemove', (e) => {
+        const rect = els.velocityCanvas.getBoundingClientRect();
+        if (velocityEditState.active && rect.width > 0 && rect.height > 0) {
+            const yView = e.clientY - rect.top;
+            if (yView < 0 || yView > rect.height) return;
+            const v = velocityFromY(yView, rect.height);
+            velocityEditState.noteIds.forEach(id => {
+                const note = STATE.notes.find(n => n.id === id);
+                if (note) note.velocity = v;
+            });
+            STATE.hasPendingHistorySnapshot = true;
+            drawNotes();
+            drawVelocityLane();
+            syncTransport();
+            return;
+        }
+        handleGridMouseMove(e);
+    });
+
+    window.addEventListener('mouseup', () => {
+        if (velocityEditState.active) {
+            velocityEditState.active = false;
+            velocityEditState.noteIds = [];
+            if (STATE.hasPendingHistorySnapshot) {
+                captureHistorySnapshot();
+                STATE.hasPendingHistorySnapshot = false;
+            }
+        }
+        handleGridMouseUp();
+    });
+
+    els.scrollContainer.addEventListener('scroll', () => {
+        renderRuler();
+        els.keysList.style.transform = `translateY(-${els.scrollContainer.scrollTop}px)`;
+        drawGrid();
+        drawNotes();
+        drawVelocityLane();
+    });
+
+    function generateNoteId() {
+        return 'n_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+    }
+    function snapBeat(beat) {
+        const s = STATE.snapToGrid;
+        return Math.round(beat / s) * s;
+    }
+
+    function deleteNote(id) {
+        STATE.notes = STATE.notes.filter(n => n.id !== id);
+        STATE.selectedNotes.delete(id);
+        drawNotes();
+        drawVelocityLane();
+        syncTransport();
+        STATE.hasPendingHistorySnapshot = true;
+    }
+
+    function getTransportTime(beats) {
+        const bars = Math.floor(beats / 4);
+        const quarters = Math.floor(beats % 4);
+        const sixteenths = Math.round((beats % 1) * 4);
+        return `${bars}:${quarters}:${sixteenths}`;
+    }
+
+    function syncTransport() {
+        const wasPlaying = STATE.isPlaying;
+        if (wasPlaying) Tone.Transport.pause();
+
+        if (mainPart) {
+            mainPart.dispose();
+            mainPart = null;
+        }
+        Tone.Transport.cancel();
+
+        const events = STATE.notes.map(n => ({
+            time: getTransportTime(n.start),
+            note: getNoteName(getMidiFromRow(n.row)),
+            duration: getTransportTime(n.duration),
+            velocity: n.velocity != null ? n.velocity : 0.8
+        }));
+
+        mainPart = new Tone.Part((time, value) => {
+            if (STATE.pianoLoaded && pianoSampler) {
+                pianoSampler.triggerAttackRelease(value.note, value.duration, time, value.velocity);
+            }
+        }, events);
+        mainPart.start(0);
+
+        let loopBars = CONFIG.totalMeasures;
+        if (STATE.notes.length > 0) {
+            const lastEnd = STATE.notes.reduce((max, n) => Math.max(max, n.start + n.duration), 0);
+            loopBars = Math.max(1, Math.ceil(lastEnd / 4) + 1);
+        }
+
+        Tone.Transport.loop = true;
+        Tone.Transport.loopStart = 0;
+        Tone.Transport.loopEnd = `${loopBars}:0:0`;
+
+        setupMetronomeSchedule();
+        if (wasPlaying) Tone.Transport.start();
+    }
+
+    function updatePlayhead() {
+        if (Tone.Transport.state !== 'started') return;
+        const beat = Tone.Transport.ticks / Tone.Transport.PPQ;
+        STATE.currentBeat = beat;
+        const { scrollLeft, w } = getViewportInfo();
+        const xView = beat * CONFIG.beatWidth - scrollLeft;
+        els.playhead.style.transform = `translateX(${xView}px)`;
+        const viewRight = scrollLeft + w;
+        const viewLeft = scrollLeft;
+        const worldX = beat * CONFIG.beatWidth;
+
+        if (STATE.isPlaying) {
+            if (worldX > viewRight - 50) {
+                els.scrollContainer.scrollLeft = worldX - 50;
+            } else if (worldX < viewLeft) {
+                els.scrollContainer.scrollLeft = Math.max(0, worldX - 50);
+            }
+        }
+        els.timeDisplay.innerText = Tone.Transport.position.split('.')[0];
+    }
+
+    function setupMetronomeSchedule() {
+        if (metronomeId != null) {
+            Tone.Transport.clear(metronomeId);
+            metronomeId = null;
+        }
+        if (!STATE.metronomeEnabled || !metronomeSynth) return;
+
+        metronomeId = Tone.Transport.scheduleRepeat((time) => {
+            const pos = Tone.Transport.position.split(':');
+            const quarter = parseInt(pos[1] || '0', 10);
+            const sixteenth = parseInt(pos[2] || '0', 10);
+            const isDownBeat = (quarter === 0 && sixteenth === 0);
+            const freqNote = isDownBeat ? "C6" : "C5";
+            metronomeSynth.triggerAttackRelease(freqNote, "16n", time);
+            flashMetronomeLed(isDownBeat);
+        }, "4n");
+    }
+
+    function flashMetronomeLed(isDownBeat) {
+        els.metronomeLed.classList.add('metronome-led-active');
+        setTimeout(() => {
+            els.metronomeLed.classList.remove('metronome-led-active');
+        }, isDownBeat ? 120 : 80);
+    }
+
+    els.btnMetronome.addEventListener('click', () => {
+        STATE.metronomeEnabled = !STATE.metronomeEnabled;
+        els.metronomeLed.classList.toggle('metronome-led-active', STATE.metronomeEnabled);
+        setupMetronomeSchedule();
+    });
+
+    els.btnPlay.onclick = async () => {
+        if (Tone.context.state !== 'running') await Tone.start();
+        if (STATE.isPlaying) {
+            Tone.Transport.pause();
+            STATE.isPlaying = false;
+            els.iconPlay.classList.remove('hidden');
+            els.iconPause.classList.add('hidden');
+        } else {
+            if (!mainPart) syncTransport();
+            Tone.Transport.start();
+            STATE.isPlaying = true;
+            els.iconPlay.classList.add('hidden');
+            els.iconPause.classList.remove('hidden');
+            const animate = () => {
+                if (!STATE.isPlaying) return;
+                updatePlayhead();
+                requestAnimationFrame(animate);
+            };
+            requestAnimationFrame(animate);
+        }
+    };
+
+    els.btnStop.onclick = () => {
+        Tone.Transport.stop();
+        STATE.isPlaying = false;
+        STATE.currentBeat = 0;
+        els.iconPlay.classList.remove('hidden');
+        els.iconPause.classList.add('hidden');
+        const { scrollLeft } = getViewportInfo();
+        els.playhead.style.transform = `translateX(${0 - scrollLeft}px)`;
+        els.timeDisplay.innerText = '0:0:0';
+    };
+
+    els.btnRewind.onclick = () => {
+        Tone.Transport.position = 0;
+        STATE.currentBeat = 0;
+        const { scrollLeft } = getViewportInfo();
+        els.playhead.style.transform = `translateX(${0 - scrollLeft}px)`;
+        els.timeDisplay.innerText = '0:0:0';
+    };
+
+    els.btnClear.onclick = () => {
+        if (confirm("Clear all notes?")) {
+            STATE.notes = [];
+            STATE.selectedNotes.clear();
+            drawNotes();
+            drawVelocityLane();
+            syncTransport();
+            STATE.hasPendingHistorySnapshot = true;
+            captureHistorySnapshot();
+        }
+    };
+
+    els.bpmInput.onchange = (e) => {
+        const val = Math.max(30, Math.min(300, parseInt(e.target.value)));
+        STATE.bpm = val;
+        Tone.Transport.bpm.value = val;
+        syncTransport();
+        STATE.hasPendingHistorySnapshot = true;
+        captureHistorySnapshot();
+    };
+
+    ['select', 'pencil', 'eraser'].forEach(t => {
+        document.getElementById(`tool-${t}`).onclick = (e) => {
+            document.querySelectorAll('.tool-btn').forEach(b => {
+                b.classList.remove('active', 'bg-teal-500/20', 'text-teal-400', 'border-teal-500/50');
+                b.classList.add('text-gray-400', 'border-transparent');
+            });
+            e.target.classList.add('active', 'bg-teal-500/20', 'text-teal-400', 'border-teal-500/50');
+            e.target.classList.remove('text-gray-400', 'border-transparent');
+            STATE.currentTool = t;
+        };
+    });
+
+    function captureHistorySnapshot() {
+        if (HISTORY.isRestoring) return;
+        const snapshot = {
+            notes: STATE.notes.map(n => ({ ...n })),
+            bpm: STATE.bpm,
+            beatWidth: CONFIG.beatWidth,
+            rowHeight: CONFIG.rowHeight
+        };
+        HISTORY.undoStack.push(snapshot);
+        if (HISTORY.undoStack.length > HISTORY.maxLength) HISTORY.undoStack.shift();
+        HISTORY.redoStack.length = 0;
+    }
+
+    function restoreSnapshot(snapshot) {
+        HISTORY.isRestoring = true;
+        STATE.notes = snapshot.notes.map(n => ({ ...n }));
+        STATE.bpm = snapshot.bpm;
+        CONFIG.beatWidth = snapshot.beatWidth;
+        CONFIG.rowHeight = snapshot.rowHeight;
+        els.bpmInput.value = STATE.bpm;
+        Tone.Transport.bpm.value = STATE.bpm;
+        recalcWorldDimensions();
+        generateKeys();
+        resizeOverlayCanvases();
+        syncTransport();
+        STATE.selectedNotes.clear();
+        HISTORY.isRestoring = false;
+    }
+
+    function undo() {
+        if (HISTORY.undoStack.length <= 1) return;
+        const current = HISTORY.undoStack.pop();
+        HISTORY.redoStack.push(current);
+        const prev = HISTORY.undoStack[HISTORY.undoStack.length - 1];
+        restoreSnapshot(prev);
+    }
+
+    function redo() {
+        if (HISTORY.redoStack.length === 0) return;
+        const snap = HISTORY.redoStack.pop();
+        HISTORY.undoStack.push(snap);
+        restoreSnapshot(snap);
+    }
+
+    function copySelectionToClipboard() {
+        if (STATE.selectedNotes.size === 0) return;
+        const selected = STATE.notes.filter(n => STATE.selectedNotes.has(n.id));
+        if (selected.length === 0) return;
+        const minStart = Math.min(...selected.map(n => n.start));
+        STATE.clipboard = {
+            notes: selected.map(n => ({
+                row: n.row,
+                startOffset: n.start - minStart,
+                duration: n.duration,
+                velocity: n.velocity
+            }))
+        };
+    }
+
+    function getPasteTargetBeat() {
+        if (STATE.lastPointerBeat != null) return snapBeat(STATE.lastPointerBeat);
+        if (STATE.currentBeat != null) return snapBeat(STATE.currentBeat);
+        return 0;
+    }
+
+    function pasteFromClipboard() {
+        if (!STATE.clipboard || !STATE.clipboard.notes || STATE.clipboard.notes.length === 0) return;
+        const baseBeat = getPasteTargetBeat();
+        const newNotes = [];
+        STATE.clipboard.notes.forEach(tpl => {
+            const start = Math.max(0, baseBeat + tpl.startOffset);
+            const n = {
+                id: generateNoteId(),
+                row: tpl.row,
+                start,
+                duration: tpl.duration,
+                velocity: tpl.velocity
+            };
+            STATE.notes.push(n);
+            newNotes.push(n);
+        });
+        STATE.selectedNotes = new Set(newNotes.map(n => n.id));
+        drawNotes();
+        drawVelocityLane();
+        syncTransport();
+        STATE.hasPendingHistorySnapshot = true;
+        captureHistorySnapshot();
+    }
+
+    window.addEventListener('keydown', (e) => {
+        const tag = e.target.tagName;
+        const isTyping = tag === 'INPUT' || tag === 'TEXTAREA' || e.target.isContentEditable;
+
+        if (!isTyping && e.code === 'Space') {
+            e.preventDefault();
+            els.btnPlay.click();
+        }
+        if (!isTyping && (e.code === 'Delete' || e.code === 'Backspace')) {
+            if (STATE.selectedNotes.size > 0) {
+                STATE.selectedNotes.forEach(id => deleteNote(id));
+                if (STATE.hasPendingHistorySnapshot) {
+                    captureHistorySnapshot();
+                    STATE.hasPendingHistorySnapshot = false;
+                }
+            }
+        }
+        if (!isTyping && (e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z') {
+            e.preventDefault();
+            undo();
+        }
+        if (!isTyping && (e.ctrlKey || e.metaKey) &&
+            (e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z'))) {
+            e.preventDefault();
+            redo();
+        }
+        if (!isTyping && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') {
+            e.preventDefault();
+            copySelectionToClipboard();
+        }
+        if (!isTyping && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') {
+            e.preventDefault();
+            pasteFromClipboard();
+        }
+    });
+
+    els.btnExport.onclick = () => {
+        const data = { bpm: STATE.bpm, notes: STATE.notes };
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'composition_' + Date.now() + '.json';
+        a.click();
+    };
+
+    // ===== Render WAV：修正 loop 錄到開頭的 bug =====
+    document.getElementById('btn-render').onclick = async () => {
+        if (STATE.notes.length === 0) {
+            alert("No notes to render!");
+            return;
+        }
+        const btn = document.getElementById('btn-render');
+        const oldText = btn.innerText;
+        btn.innerText = "RENDERING...";
+        btn.disabled = true;
+        btn.classList.add('opacity-50', 'cursor-not-allowed');
+
+        try {
+            const recorder = new Tone.Recorder();
+            pianoSampler.connect(recorder);
+
+            if (STATE.isPlaying) els.btnStop.click();
+            await new Promise(r => setTimeout(r, 200));
+
+            // 重新 sync 一次，確保 mainPart / Transport 都是最新
+            syncTransport();
+
+            // 找出所有 note 的最後結束 beat
+            const lastEndBeat = STATE.notes.reduce((max, n) => Math.max(max, n.start + n.duration), 0);
+            const tailBeats = 2; // 多留兩拍尾巴
+            const totalBeats = lastEndBeat + tailBeats;
+            const durationSecs = totalBeats * (60 / STATE.bpm);
+
+            // 暫存原本 loop 設定
+            const prevLoop = Tone.Transport.loop;
+            const prevLoopStart = Tone.Transport.loopStart;
+            const prevLoopEnd = Tone.Transport.loopEnd;
+
+            // 渲染時關閉 loop，避免錄到循環開頭
+            Tone.Transport.loop = false;
+            Tone.Transport.loopStart = 0;
+            Tone.Transport.loopEnd = getTransportTime(totalBeats);
+
+            recorder.start();
+            Tone.Transport.stop();
+            Tone.Transport.position = 0;
+            Tone.Transport.start();
+
+            await new Promise(resolve => setTimeout(resolve, (durationSecs * 1000) + 500));
+
+            Tone.Transport.stop();
+            const recording = await recorder.stop();
+
+            // 還原 loop 設定並重新 sync
+            Tone.Transport.loop = prevLoop;
+            Tone.Transport.loopStart = prevLoopStart;
+            Tone.Transport.loopEnd = prevLoopEnd;
+            syncTransport();
+
+            const url = URL.createObjectURL(recording);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'composition_' + Date.now() + '.webm';
+            a.click();
+        } catch (e) {
+            console.error(e);
+            alert("Rendering failed. See console.");
+        } finally {
+            btn.innerText = oldText;
+            btn.disabled = false;
+            btn.classList.remove('opacity-50', 'cursor-not-allowed');
+        }
+    };
+
+    document.body.addEventListener('dragover', e => e.preventDefault());
+    document.body.addEventListener('drop', e => {
+        e.preventDefault();
+        if (e.dataTransfer.files.length > 0) {
+            const file = e.dataTransfer.files[0];
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                try {
+                    const data = JSON.parse(event.target.result);
+                    if (data.notes && Array.isArray(data.notes)) {
+                        STATE.notes = data.notes;
+                        STATE.bpm = data.bpm || 120;
+                        els.bpmInput.value = STATE.bpm;
+                        Tone.Transport.bpm.value = STATE.bpm;
+                        drawNotes();
+                        drawVelocityLane();
+                        syncTransport();
+                        STATE.hasPendingHistorySnapshot = true;
+                        captureHistorySnapshot();
+                        alert("Project loaded successfully!");
+                    }
+                } catch (err) {
+                    alert("Invalid JSON file");
+                }
+            };
+            reader.readAsText(file);
+        }
+    });
+
+    els.gridArea.addEventListener('wheel', (e) => {
+        const { scrollLeft, scrollTop } = getViewportInfo();
+        const rect = els.gridArea.getBoundingClientRect();
+        const pointerX = e.clientX - rect.left;
+        const pointerY = e.clientY - rect.top;
+        const worldX = scrollLeft + pointerX;
+        const worldY = scrollTop + pointerY;
+
+        if (e.ctrlKey || e.altKey) {
+            e.preventDefault();
+            if (e.ctrlKey) {
+                const zoomFactor = e.deltaY < 0 ? 1.1 : 0.9;
+                let newBeatWidth = CONFIG.beatWidth * zoomFactor;
+                newBeatWidth = Math.min(CONFIG.zoom.maxBeatWidth, Math.max(CONFIG.zoom.minBeatWidth, newBeatWidth));
+                const beatAtCursor = worldX / CONFIG.beatWidth;
+                CONFIG.beatWidth = newBeatWidth;
+                recalcWorldDimensions();
+                const newWorldX = beatAtCursor * CONFIG.beatWidth;
+                els.scrollContainer.scrollLeft = newWorldX - pointerX;
+            } else if (e.altKey) {
+                const zoomFactor = e.deltaY < 0 ? 1.1 : 0.9;
+                let newRowHeight = CONFIG.rowHeight * zoomFactor;
+                newRowHeight = Math.min(CONFIG.zoom.maxRowHeight, Math.max(CONFIG.zoom.minRowHeight, newRowHeight));
+                const rowAtCursor = worldY / CONFIG.rowHeight;
+                CONFIG.rowHeight = newRowHeight;
+                totalHeight = totalKeys * CONFIG.rowHeight;
+                els.content.style.height = `${totalHeight}px`;
+                generateKeys();
+                const newWorldY = rowAtCursor * CONFIG.rowHeight;
+                els.scrollContainer.scrollTop = newWorldY - pointerY;
+            }
+            resizeOverlayCanvases();
+            drawGrid();
+            drawNotes();
+            drawVelocityLane();
+            renderRuler();
+            STATE.hasPendingHistorySnapshot = true;
+            captureHistorySnapshot();
+        } else {
+            e.preventDefault();
+            if (e.shiftKey) {
+                els.scrollContainer.scrollLeft += e.deltaY;
+            } else {
+                els.scrollContainer.scrollTop += e.deltaY;
+                els.scrollContainer.scrollLeft += e.deltaX;
+            }
+        }
+    }, { passive: false });
+
+    function renderAll() {
+        drawGrid();
+        drawNotes();
+        drawVelocityLane();
+        renderRuler();
+    }
+
+    window.addEventListener('resize', () => {
+        resizeOverlayCanvases();
+    });
+
+    document.getElementById('init-btn').onclick = () => {
+        els.startOverlay.classList.add('hidden');
+        els.loading.classList.remove('hidden');
+        setTimeout(() => {
+            initAudio().then(() => {
+                initUI();
+                syncTransport();
+                autoGenerateFromUI();
+            });
+        }, 100);
+    };
+
+    window.onload = () => {
+        els.startOverlay.classList.remove('hidden');
+    };
+
+    // ==========================
+    // AUTO COMPOSE 理論 & 修正
+    // ==========================
+
+    function buildMinorScaleSets(rootPc) {
+        const natDeg = [0, 2, 3, 5, 7, 8, 10];
+        const harmDeg = [0, 2, 3, 5, 7, 8, 11];
+        const melDeg = [0, 2, 3, 5, 7, 9, 11];
+        const natural = natDeg.map(d => (rootPc + d) % 12);
+        const harmonic = harmDeg.map(d => (rootPc + d) % 12);
+        const melodicAsc = melDeg.map(d => (rootPc + d) % 12);
+
+        const modernSet = new Set(natural.concat(harmonic, melodicAsc));
+        const modern = Array.from(modernSet).sort((a, b) => ((a - b + 12) % 12));
+
+        return { natural, harmonic, melodicAsc, modern };
+    }
+
+    function parseKey(rootName, mode) {
+        const keyName = rootName.toUpperCase();
+        const rootPc = NOTE_TO_SEMITONE[keyName];
+        if (rootPc == null) throw new Error('Invalid key: ' + rootName);
+
+        const keyRootMidi = 60 + rootPc;
+
+        const scaleSets = (mode === 'minor')
+            ? buildMinorScaleSets(rootPc)
+            : { major: [0, 2, 4, 5, 7, 9, 11].map(d => (rootPc + d) % 12) };
+
+        const defaultScale = (mode === 'minor') ? scaleSets.natural : scaleSets.major;
+
+        return {
+            rootName,
+            mode,
+            rootPc,
+            keyRootMidi,
+            scaleSets,
+            scalePcs: defaultScale
+        };
+    }
+
+    function parseChordSymbol(sym, key) {
+        let s = sym.trim();
+        if (!s) return null;
+
+        let m = s.match(/^([A-Ga-g])([#b]?)(.*)$/);
+        if (m) {
+            const letter = m[1].toUpperCase();
+            const accidental = (m[2] || '').replace('b', 'B');
+            const rest = (m[3] || '').toLowerCase();
+            const rootNameRaw = letter + accidental;
+            const rootPc = NOTE_TO_SEMITONE[rootNameRaw];
+            if (rootPc == null) return null;
+            let quality = 'maj';
+            if (rest.startsWith('m') && !rest.startsWith('maj')) quality = 'min';
+            const intervals = quality === 'maj' ? [0, 4, 7] : [0, 3, 7];
+            const display = PC_TO_NOTE[rootPc] + (quality === 'min' ? 'm' : '');
+            return { symbol: s, rootPc, quality, intervals, display };
+        }
+
+        const romanMap = { 'I': 0, 'II': 2, 'III': 4, 'IV': 5, 'V': 7, 'VI': 9, 'VII': 11 };
+        m = s.match(/^([ivIV]+)(.*)$/);
+        if (m && key) {
+            const numeral = m[1];
+            const rest = (m[2] || '').toLowerCase();
+            const isUpper = numeral === numeral.toUpperCase();
+            const degreeName = numeral.toUpperCase();
+            const baseDegreePcOffset = romanMap[degreeName];
+            if (baseDegreePcOffset == null) return null;
+            const rootPc = (key.rootPc + baseDegreePcOffset) % 12;
+            let quality = isUpper ? 'maj' : 'min';
+            if (rest.startsWith('m') && !rest.startsWith('maj')) quality = 'min';
+            const intervals = quality === 'maj' ? [0, 4, 7] : [0, 3, 7];
+            const display = PC_TO_NOTE[rootPc] + (quality === 'min' ? 'm' : '');
+            return { symbol: s, rootPc, quality, intervals, display };
+        }
+        return null;
+    }
+
+    function parseChordProgression(chordStr, key) {
+        if (!chordStr) return [];
+        const tokens = chordStr
+            .split(/[\|\n,]+/g)
+            .map(t => t.trim())
+            .filter(Boolean);
+        const chords = [];
+        let invalid = [];
+        tokens.forEach(t => {
+            const chord = parseChordSymbol(t, key);
+            if (chord) chords.push(chord);
+            else invalid.push(t);
+        });
+        if (chords.length === 0 && invalid.length > 0) {
+            alert('Chord progression tokens invalid: ' + invalid.join(', '));
+        }
+        return chords;
+    }
+
+    function randomChoice(arr) {
+        return arr[Math.floor(Math.random() * arr.length)];
+    }
+    function randomInt(min, max) {
+        return Math.floor(Math.random() * (max - min + 1)) + min;
+    }
+
+    function makeChord(rootPc, quality) {
+        const intervals = quality === 'maj' ? [0, 4, 7] : [0, 3, 7];
+        const display = PC_TO_NOTE[rootPc] + (quality === 'min' ? 'm' : '');
+        return { symbol: display, rootPc, quality, intervals, display };
+    }
+
+    function chordSequenceToString(chords) {
+        return chords.map(ch => ch.display || ch.symbol || '').join(' | ');
+    }
+
+    function pickVerseAlteration(ch, key) {
+        if (key.mode !== 'minor') return null;
+        const relPc = (ch.rootPc - key.rootPc + 12) % 12;
+        let candidates = [];
+        switch (relPc) {
+            case 0:
+                candidates = [
+                    makeChord((key.rootPc + 3) % 12, 'maj'),
+                    makeChord((key.rootPc + 8) % 12, 'maj')
+                ];
+                break;
+            case 3:
+                candidates = [
+                    makeChord(key.rootPc, 'min'),
+                    makeChord((key.rootPc + 8) % 12, 'maj')
+                ];
+                break;
+            case 5:
+                candidates = [
+                    makeChord((key.rootPc + 8) % 12, 'maj'),
+                    makeChord((key.rootPc + 10) % 12, 'maj')
+                ];
+                break;
+            case 7:
+                candidates = [
+                    makeChord((key.rootPc + 10) % 12, 'maj'),
+                    makeChord((key.rootPc + 3) % 12, 'maj')
+                ];
+                break;
+            case 8:
+                candidates = [
+                    makeChord((key.rootPc + 5) % 12, 'min'),
+                    makeChord((key.rootPc + 10) % 12, 'maj')
+                ];
+                break;
+            case 10:
+                candidates = [
+                    makeChord((key.rootPc + 7) % 12, 'maj'),
+                    makeChord((key.rootPc + 3) % 12, 'maj')
+                ];
+                break;
+            default:
+                break;
+        }
+        if (!candidates.length) return null;
+        return randomChoice(candidates);
+    }
+
+    function pickChorusAlteration(ch, key) {
+        if (key.mode !== 'minor') return null;
+        const relPc = (ch.rootPc - key.rootPc + 12) % 12;
+        let candidates = [];
+        switch (relPc) {
+            case 0:
+                candidates = [
+                    makeChord((key.rootPc + 3) % 12, 'maj'),
+                    makeChord((key.rootPc + 8) % 12, 'maj'),
+                    makeChord((key.rootPc + 10) % 12, 'maj')
+                ];
+                break;
+            case 3:
+                candidates = [
+                    makeChord((key.rootPc + 8) % 12, 'maj'),
+                    makeChord(key.rootPc, 'min')
+                ];
+                break;
+            case 5:
+                candidates = [
+                    makeChord((key.rootPc + 10) % 12, 'maj'),
+                    makeChord((key.rootPc + 7) % 12, 'maj')
+                ];
+                break;
+            case 7:
+                candidates = [
+                    makeChord((key.rootPc + 10) % 12, 'maj'),
+                    makeChord((key.rootPc + 3) % 12, 'maj')
+                ];
+                break;
+            case 8:
+                candidates = [
+                    makeChord((key.rootPc + 3) % 12, 'maj'),
+                    makeChord((key.rootPc + 10) % 12, 'maj')
+                ];
+                break;
+            case 10:
+                candidates = [
+                    makeChord((key.rootPc + 7) % 12, 'maj'),
+                    makeChord((key.rootPc + 3) % 12, 'maj')
+                ];
+                break;
+            default:
+                break;
+        }
+        if (!candidates.length) return null;
+        return randomChoice(candidates);
+    }
+
+    function mutateChordSequence(chords, key, role) {
+        if (key.mode !== 'minor' || chords.length === 0) return chords;
+        let result = chords.map(ch => ({ ...ch }));
+
+        if (result.length > 1 && Math.random() < 0.6) {
+            const rot = Math.floor(Math.random() * result.length);
+            result = result.slice(rot).concat(result.slice(0, rot));
+        }
+
+        for (let i = 0; i < result.length; i++) {
+            const ch = result[i];
+            if (!ch) continue;
+            const r = Math.random();
+            let alt = null;
+            if (role === 'verse') {
+                if (r < 0.25) alt = pickVerseAlteration(ch, key);
+            } else {
+                if (r < 0.3) alt = pickChorusAlteration(ch, key);
+            }
+            if (alt) result[i] = alt;
+        }
+        return result;
+    }
+
+    function quantizeMidiToScale(midi, scalePcs) {
+        const pc = midi % 12;
+        if (scalePcs.includes(pc)) return midi;
+        let bestPc = pc, bestDist = 99;
+        scalePcs.forEach(spc => {
+            const d = Math.min((spc - pc + 12) % 12, (pc - spc + 12) % 12);
+            if (d < bestDist) {
+                bestDist = d;
+                bestPc = spc;
+            }
+        });
+        let bestMidi = midi; bestDist = 99;
+        for (let o = -1; o <= 1; o++) {
+            const cand = (Math.floor(midi / 12) + o) * 12 + bestPc;
+            const d = Math.abs(cand - midi);
+            if (d < bestDist) {
+                bestDist = d;
+                bestMidi = cand;
+            }
+        }
+        return bestMidi;
+    }
+
+    function quantizeToScale(midi, key) {
+        return quantizeMidiToScale(midi, key.scalePcs);
+    }
+
+    function selectScalePcsForContext({ key, chord, beatInBar, isCadence, prevMidi, currMidi, sectionType }) {
+        if (key.mode !== 'minor') {
+            return key.scaleSets.major;
+        }
+        const sets = key.scaleSets;
+        let scale = sets.natural;
+
+        const direction = (prevMidi != null && currMidi != null)
+            ? Math.sign(currMidi - prevMidi)
+            : 0;
+
+        let relPc = null;
+        let isDominant = false;
+        let isSubdominant = false;
+        let isFlatVII = false;
+
+        if (chord) {
+            relPc = (chord.rootPc - key.rootPc + 12) % 12;
+            isDominant = (relPc === 7);
+            isSubdominant = (relPc === 5 || relPc === 2);
+            isFlatVII = (relPc === 10);
+        }
+
+        if (isCadence || isDominant || (sectionType && sectionType.startsWith('pre'))) {
+            scale = sets.harmonic;
+        } else if (direction > 0 && beatInBar >= 2) {
+            scale = sets.melodicAsc;
+        } else if (isFlatVII || isSubdominant) {
+            scale = sets.modern;
+        } else {
+            scale = sets.natural;
+        }
+        return scale;
+    }
+
+    function getChordTonePcs(key, chord) {
+        const pcs = chord.intervals.map(intv => (chord.rootPc + intv) % 12);
+        if (key.mode === 'minor') {
+            const relPc = (chord.rootPc - key.rootPc + 12) % 12;
+            if (relPc === 7 || relPc === 0) {
+                const seventh = chord.quality === 'maj' ? 11 : 10;
+                pcs.push((chord.rootPc + seventh) % 12);
+            }
+        } else {
+            const relPc = (chord.rootPc - key.rootPc + 12) % 12;
+            if (chord.quality === 'maj' && relPc !== 5) {
+                pcs.push((chord.rootPc + 11) % 12);
+            }
+        }
+        return Array.from(new Set(pcs));
+    }
+
+    function getAllowedTensionsPcs(key, chord, chordTonePcs) {
+        let scale;
+        if (key.mode === 'minor') {
+            scale = key.scaleSets.modern;
+        } else {
+            scale = key.scaleSets.major;
+        }
+        let tensions = scale.filter(pc => !chordTonePcs.includes(pc));
+
+        if (tensions.length > 4) {
+            const rootPc = chord.rootPc;
+            tensions.sort((a, b) => {
+                const da = Math.min((a - rootPc + 12) % 12, (rootPc - a + 12) % 12);
+                const db = Math.min((b - rootPc + 12) % 12, (rootPc - b + 12) % 12);
+                return da - db;
+            });
+            tensions = tensions.slice(0, 4);
+        }
+        return tensions;
+    }
+
+    function snapMidiToNearestPc(midi, pcs) {
+        if (!pcs || pcs.length === 0) return midi;
+        let bestMidi = midi;
+        let bestDist = 1e9;
+        pcs.forEach(pc => {
+            for (let o = -2; o <= 2; o++) {
+                const cand = (Math.floor(midi / 12) + o) * 12 + pc;
+                const d = Math.abs(cand - midi);
+                if (d < bestDist) {
+                    bestDist = d;
+                    bestMidi = cand;
+                }
+            }
+        });
+        return bestMidi;
+    }
+
+    function refineNoteWithHarmony(midi, ctx) {
+        const { key, chord, isStrong } = ctx;
+        const scalePcs = selectScalePcsForContext(ctx);
+        let candidate = quantizeMidiToScale(midi, scalePcs);
+
+        if (!chord) return candidate;
+
+        const chordTonePcs = getChordTonePcs(key, chord);
+        const tensionPcs = getAllowedTensionsPcs(key, chord, chordTonePcs);
+
+        const pc = candidate % 12;
+        const isChordTone = chordTonePcs.includes(pc);
+        const isTension = tensionPcs.includes(pc);
+
+        if (isStrong) {
+            if (!isChordTone) {
+                candidate = snapMidiToNearestPc(candidate, chordTonePcs);
+            }
+        } else {
+            if (!isChordTone && !isTension) {
+                candidate = snapMidiToNearestPc(candidate, chordTonePcs.concat(tensionPcs));
+            }
+        }
+
+        // 大跳約束（>= 完全四度）落在和弦 1/3/5
+        const prevMidi = ctx.prevMidi ?? null;
+        if (prevMidi != null) {
+            const leapSize = Math.abs(candidate - prevMidi);
+            if (leapSize >= 5) {
+                const allowedLeapPcs = [0, 4, 7].map(intv => (chord.rootPc + intv) % 12);
+                candidate = snapMidiToNearestPc(candidate, allowedLeapPcs);
+            }
+        }
+
+        return candidate;
+    }
+
+    function getRangeInfo(key, range) {
+        const rootMidi = 60 + key.rootPc;
+        let center;
+        if (range === 'low') {
+            center = rootMidi - 7;
+        } else if (range === 'mid') {
+            center = rootMidi;
+        } else {
+            center = rootMidi + 5;
+        }
+
+        const downSpan = range === 'low' ? 7 : 8;
+        const upSpan   = range === 'high' ? 8 : 7;
+
+        const minMidi = Math.max(45, center - downSpan);
+        const maxMidi = Math.min(84, center + upSpan);
+        return { centerMidi: center, minMidi, maxMidi };
+    }
+
+    function clampMidiToRange(midi, rangeInfo) {
+        return Math.min(rangeInfo.maxMidi, Math.max(rangeInfo.minMidi, midi));
+    }
+
+    function normalizePatternTo4(pattern) {
+        let sum = pattern.reduce((a, b) => a + b, 0);
+        if (Math.abs(sum - 4) < 1e-6) return pattern;
+        let scaled = pattern.map(d => Math.max(0.25, Math.round(d * 16 / sum) / 4));
+        sum = scaled.reduce((a, b) => a + b, 0);
+        if (sum > 4) {
+            scaled[scaled.length - 1] = Math.max(0.25, scaled[scaled.length - 1] - (sum - 4));
+        } else if (sum < 4) {
+            scaled[scaled.length - 1] += (4 - sum);
+        }
+        return scaled;
+    }
+
+    function pickMotifRhythm(density, isChorusMain) {
+        const verseSparse = [
+            [2, 2],
+            [1, 1, 2],
+            [1.5, 0.5, 2]
+        ];
+        const verseMedium = [
+            [1, 0.5, 0.5, 2],
+            [0.5, 0.5, 1, 2],
+            [0.5, 0.5, 1, 0.5, 1.5]
+        ];
+        const verseDense = [
+            [0.5, 0.5, 0.5, 0.5, 1, 1],
+            [0.25, 0.25, 0.5, 1, 0.5, 1.5]
+        ];
+
+        const chorusBase = [
+            [1, 0.5, 0.5, 1, 1],
+            [0.5, 0.5, 1, 0.5, 0.5, 1]
+        ];
+        const chorusDense = [
+            [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
+            [0.25, 0.25, 0.5, 0.5, 0.25, 0.25, 0.5, 0.5, 1]
+        ];
+
+        let group;
+        if (isChorusMain) {
+            if (density === 'sparse') group = chorusBase;
+            else if (density === 'dense') group = chorusBase.concat(chorusDense);
+            else group = chorusBase.concat([verseDense[0]]);
+        } else {
+            if (density === 'sparse') group = verseSparse;
+            else if (density === 'dense') group = verseMedium.concat(verseDense);
+            else group = verseMedium;
+        }
+        let pattern = randomChoice(group);
+        return normalizePatternTo4(pattern.slice());
+    }
+
+    function chooseStartPitch(key, rangeInfo, isChorusMain, isSub) {
+        const rootMidi = 60 + key.rootPc;
+        const center = isChorusMain ? rootMidi + 2 : rootMidi;
+        const minMidi = rangeInfo.minMidi;
+        const maxMidi = rangeInfo.maxMidi;
+        const candidatePcs = isChorusMain
+            ? [key.scalePcs[2], key.scalePcs[4], key.scalePcs[0]]
+            : [key.scalePcs[0], key.scalePcs[2]];
+        const candidates = [];
+        candidatePcs.forEach(pc => {
+            for (let o = 2; o <= 7; o++) {
+                const m = o * 12 + pc;
+                if (m >= minMidi && m <= maxMidi) candidates.push(m);
+            }
+        });
+        if (!candidates.length) return clampMidiToRange(center, rangeInfo);
+        candidates.sort((a, b) => Math.abs(a - center) - Math.abs(b - center));
+        if (isSub && candidates.length > 2) return candidates[2];
+        return candidates[0];
+    }
+
+    // === 模式重複懲罰：避免 AB AB AB / AAAA 之類 ===
+    function computePatternPenalty(history, candidateMidi) {
+        const maxLen = 4;
+        if (!history || history.length < 3) return 0;
+        const seq = history.slice(-16).concat(candidateMidi);
+        let penalty = 0;
+
+        for (let len = 2; len <= maxLen; len++) {
+            if (seq.length < len * 2) continue;
+            const lastStart = seq.length - len;
+            const lastPattern = seq.slice(lastStart);
+            let repeatCount = 0;
+            for (let i = 0; i <= seq.length - len * 2; i++) {
+                let ok = true;
+                for (let j = 0; j < len; j++) {
+                    if (seq[i + j] !== lastPattern[j]) {
+                        ok = false;
+                        break;
+                    }
+                }
+                if (ok) repeatCount++;
+            }
+            if (repeatCount > 0) {
+                penalty -= repeatCount * len * 2;
+            }
+        }
+        return penalty;
+    }
+
+    // === 改良版評分：加入模式懲罰 + style ===
+    function evaluateMelodicCandidate({
+        midi,
+        prevMidi,
+        interval,
+        prevInterval,
+        key,
+        rangeInfo,
+        isStrong,
+        isChorusMain,
+        isSub,
+        history,
+        melodyStyle
+    }) {
+        if (prevMidi == null) return 100;
+        let score = 0;
+        const dist = Math.abs(interval);
+
+        // 1) basic interval preference
+        if (dist <= 1) {
+            score += 6; // 級進
+        } else if (dist <= 2) {
+            score += 9; // 2 度小跳，hook 感
+        } else if (dist <= 4) {
+            score += 4; // 小三 / 完四
+        } else if (dist <= 7) {
+            score -= 1; // 完五
+        } else {
+            score -= 10; // 到 8 度以上
+        }
+
+        // 2) 連續大跳同方向
+        if (prevInterval != null &&
+            Math.sign(prevInterval) === Math.sign(interval) &&
+            Math.abs(prevInterval) >= 5 &&
+            dist >= 5) {
+            score -= 10;
+        }
+
+        // 3) 避免硬性同音
+        if (prevMidi != null && midi === prevMidi) {
+            score -= 6;
+        }
+        if (history && history.length >= 2) {
+            const h1 = history[history.length - 1];
+            const h2 = history[history.length - 2];
+            if (midi === h1 && midi === h2) {
+                score -= 14;
+            }
+        }
+
+        // 4) 範圍控制
+        const center = rangeInfo.centerMidi;
+        const dCenter = Math.abs(midi - center);
+        score -= dCenter / 4;
+        if (midi > center + 7) score -= 8;
+        if (midi < center - 9) score -= 4;
+
+        // 5) 副歌可微微偏上
+        if (isChorusMain && midi > center) {
+            score += 2;
+        }
+
+        // 6) style bias
+        if (!melodyStyle) melodyStyle = 'smooth';
+        if (melodyStyle === 'smooth') {
+            if (dist > 3) score -= (dist - 3) * 2;
+        } else if (melodyStyle === 'hooky') {
+            if (dist === 2 || dist === 3) score += 3;
+            const pc = midi % 12;
+            if (key.scalePcs.includes(pc)) score += 1;
+        } else if (melodyStyle === 'leapy') {
+            if (dist >= 4 && dist <= 7) score += 2;
+        }
+
+        // 7) 模式重複懲罰
+        if (history && history.length >= 3) {
+            score += computePatternPenalty(history, midi);
+        }
+
+        // 8) 弱拍略放寬
+        if (!isStrong && !isChorusMain) {
+            score += 0.5;
+        }
+
+        return score;
+    }
+
+    // === 改良版 pitch 選擇：不再用 interval=0，加入 history + style ===
+    function chooseNextPitch(prevMidi, key, rangeInfo, isStrong, isChorusMain, isSub, prevInterval, history, melodyStyle) {
+        if (prevMidi == null) {
+            return chooseStartPitch(key, rangeInfo, isChorusMain, isSub);
+        }
+
+        const smallSteps   = [1, -1, 2, -2];
+        const smallJumps   = [3, -3, 4, -4];
+        const leapIntervals = [5, -5, 7, -7];
+
+        let intervals = smallSteps.concat(smallJumps);
+
+        if (isChorusMain && Math.random() < 0.6) {
+            intervals = intervals.concat(leapIntervals);
+        } else if (!isChorusMain && Math.random() < 0.3) {
+            intervals = intervals.concat([5, -5]);
+        }
+
+        // 不同 style 微調
+        if (melodyStyle === 'smooth') {
+            intervals = intervals.filter(iv => Math.abs(iv) <= 4);
+        } else if (melodyStyle === 'leapy') {
+            intervals = intervals.concat([7, -7]);
+        }
+
+        // 上一個已經大跳 → 優先反向級進
+        if (prevInterval != null && Math.abs(prevInterval) >= 5) {
+            const prevDir = Math.sign(prevInterval);
+            intervals = intervals.filter(iv => {
+                const dir = Math.sign(iv);
+                if (dir === prevDir && Math.abs(iv) >= 5) return false;
+                return true;
+            });
+        }
+
+        const candidates = [];
+        const localHistory = (history || []).slice(-16);
+
+        for (const iv of intervals) {
+            let midi = prevMidi + iv;
+            midi = clampMidiToRange(midi, rangeInfo);
+            midi = quantizeToScale(midi, key);
+
+            const score = evaluateMelodicCandidate({
+                midi,
+                prevMidi,
+                interval: iv,
+                prevInterval,
+                key,
+                rangeInfo,
+                isStrong,
+                isChorusMain,
+                isSub,
+                history: localHistory,
+                melodyStyle
+            });
+
+            candidates.push({ midi, score });
+        }
+
+        if (!candidates.length) {
+            return clampMidiToRange(prevMidi, rangeInfo);
+        }
+
+        candidates.sort((a, b) => b.score - a.score);
+        return candidates[0].midi;
+    }
+
+    function smoothMotifMelodicLeaps(motifNotes, key, rangeInfo, isChorusMain) {
+        if (!motifNotes || motifNotes.length < 2) return;
+        motifNotes.sort((a, b) => a.startOffset - b.startOffset);
+        const maxLeap = isChorusMain ? 9 : 12;
+
+        for (let i = 1; i < motifNotes.length; i++) {
+            const prev = motifNotes[i - 1];
+            const curr = motifNotes[i];
+            let interval = curr.midi - prev.midi;
+            let size = Math.abs(interval);
+            if (size < 7) continue;
+            const dir = interval >= 0 ? 1 : -1;
+
+            if (size > maxLeap) {
+                const target = prev.midi + dir * maxLeap;
+                curr.midi = clampMidiToRange(quantizeToScale(target, key), rangeInfo);
+                interval = curr.midi - prev.midi;
+                size = Math.abs(interval);
+            }
+
+            if (size < 7) continue;
+
+            if (i >= 2) {
+                const pre = motifNotes[i - 2];
+                const step = 2;
+                const targetPrev = curr.midi - dir * step;
+                prev.midi = clampMidiToRange(quantizeToScale(targetPrev, key), rangeInfo);
+
+                const targetPre = prev.midi - dir * step;
+                pre.midi = clampMidiToRange(quantizeToScale(targetPre, key), rangeInfo);
+            } else {
+                const step = 2;
+                const targetPrev = curr.midi - dir * step;
+                prev.midi = clampMidiToRange(quantizeToScale(targetPrev, key), rangeInfo);
+            }
+
+            if (i + 1 < motifNotes.length) {
+                const next = motifNotes[i + 1];
+                const stepChoices = [1, 2];
+                const step = randomChoice(stepChoices);
+                const sign = Math.random() < 0.5 ? 1 : -1;
+                const targetNext = curr.midi + sign * step;
+                next.midi = clampMidiToRange(quantizeToScale(targetNext, key), rangeInfo);
+            }
+        }
+    }
+
+    function imposeMotifRepetition(notes, bars, rangeInfo) {
+        const beatsPerBar = 4;
+        if (bars < 2) return;
+        const firstBarNotes = notes.filter(n => n.startOffset < beatsPerBar);
+        if (firstBarNotes.length === 0) return;
+        const anchor = firstBarNotes.reduce((a, b) => a.startOffset <= b.startOffset ? a : b);
+
+        for (let bar = 1; bar < bars; bar++) {
+            const barStart = bar * beatsPerBar;
+            const target = notes.find(n => n.startOffset >= barStart && n.startOffset < barStart + 0.5);
+            if (!target) continue;
+            let transpose = 0;
+            if (bar === bars - 1 && Math.random() < 0.7) {
+                transpose = Math.random() < 0.5 ? 2 : -2;
+            }
+            target.midi = clampMidiToRange(anchor.midi + transpose, rangeInfo);
+        }
+    }
+
+    // === 改良版：buildMotifBar 會帶入 history + style ===
+    function buildMotifBar({ key, rangeInfo, durations, isChorusMain, isSub, melodyStyle }) {
+        const notesInBar = [];
+        let t = 0;
+        let prevMidi = null;
+        let prevInterval = null;
+        const pitchHistory = [];
+
+        for (let i = 0; i < durations.length; i++) {
+            const dur = durations[i];
+            const strong = (Math.abs(t - 0) < 1e-6) || (Math.abs(t - 2) < 1e-6);
+            let midi;
+            if (prevMidi == null) {
+                midi = chooseStartPitch(key, rangeInfo, isChorusMain, isSub);
+            } else {
+                midi = chooseNextPitch(
+                    prevMidi,
+                    key,
+                    rangeInfo,
+                    strong,
+                    isChorusMain,
+                    isSub,
+                    prevInterval,
+                    pitchHistory,
+                    melodyStyle
+                );
+            }
+            midi = clampMidiToRange(quantizeToScale(midi, key), rangeInfo);
+
+            const baseVel = isChorusMain ? 0.9 : (isSub ? 0.78 : 0.8);
+            const accent = strong ? 0.12 : 0;
+            const v = Math.max(0.45, Math.min(1, baseVel + accent + (Math.random() * 0.06 - 0.03)));
+
+            notesInBar.push({ midi, pos: t, duration: dur, velocity: v });
+            if (prevMidi != null) prevInterval = midi - prevMidi;
+            prevMidi = midi;
+            pitchHistory.push(midi);
+            t += dur;
+        }
+        return notesInBar;
+    }
+
+    function varyMotifBar(barNotes, { key, rangeInfo, strength }) {
+        const result = barNotes.map(n => ({ ...n }));
+        const count = result.length;
+        if (!count) return result;
+
+        const changeCount = strength === 'medium'
+            ? Math.max(1, Math.round(count * 0.4))
+            : 1;
+
+        const indices = new Set();
+        indices.add(count - 1);
+        for (let i = 0; i < count - 1 && indices.size < changeCount; i++) {
+            if (Math.random() < 0.5) indices.add(i);
+        }
+
+        indices.forEach(idx => {
+            const n = result[idx];
+            const stepOptions = strength === 'medium' ? [2, -2, 3, -3] : [2, -2];
+            const step = randomChoice(stepOptions);
+            let midiNew = n.midi + step;
+            midiNew = clampMidiToRange(quantizeToScale(midiNew, key), rangeInfo);
+            n.midi = midiNew;
+        });
+
+        return result;
+    }
+
+    function sequenceMotifBar(barNotes, { key, rangeInfo, direction }) {
+        const step = direction || (Math.random() < 0.5 ? 2 : -2);
+        return barNotes.map(n => {
+            let m = n.midi + step;
+            m = clampMidiToRange(quantizeToScale(m, key), rangeInfo);
+            return { ...n, midi: m };
+        });
+    }
+
+    function closestPitchToPcSet(currentMidi, pcs, rangeInfo) {
+        let best = currentMidi, bestDist = 1e9;
+        pcs.forEach(pc => {
+            for (let o = -2; o <= 2; o++) {
+                const cand = (Math.floor(currentMidi / 12) + o) * 12 + pc;
+                if (rangeInfo && (cand < rangeInfo.minMidi || cand > rangeInfo.maxMidi)) continue;
+                const d = Math.abs(cand - currentMidi);
+                if (d < bestDist) { bestDist = d; best = cand; }
+            }
+        });
+        return best;
+    }
+
+    function makeCadentialMotifBar(barNotes, { key, rangeInfo }) {
+        const result = barNotes.map(n => ({ ...n }));
+        if (!result.length) return result;
+        const lastIdx = result.length - 1;
+        const prev = result[lastIdx - 1] || result[lastIdx];
+        const targetPcs = [key.rootPc];
+        const last = result[lastIdx];
+        last.midi = closestPitchToPcSet(prev ? prev.midi : last.midi, targetPcs, rangeInfo);
+        return result;
+    }
+
+    // === 改良版 generateMotifNotes：Verse / Chorus 都用 style + pattern penalty ===
+    function generateMotifNotes({ key, bars, density, rangeInfo, isChorusMain, isSub, style }) {
+        const beatsPerBar = 4;
+        const totalBars = Math.max(1, bars | 0);
+        const notes = [];
+        const melodyStyle = style || 'smooth';
+
+        if (isChorusMain) {
+            const corePatterns = [
+                [1, 0.5, 0.5, 1, 1],
+                [0.5, 0.5, 1, 0.5, 0.5, 1],
+                [0.5, 0.5, 0.5, 0.5, 1, 1]
+            ];
+            const syncPatterns = [
+                [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
+                [0.25, 0.25, 0.5, 0.5, 0.25, 0.25, 0.5, 0.5, 1]
+            ];
+            let pool;
+            if (density === 'sparse') pool = corePatterns.slice(0, 2);
+            else if (density === 'dense') pool = corePatterns.concat(syncPatterns);
+            else pool = corePatterns;
+
+            let basePattern = normalizePatternTo4(randomChoice(pool));
+            const motifBars = Math.min(4, totalBars);
+
+            const barTemplates = [];
+            const bar1 = buildMotifBar({ key, rangeInfo, durations: basePattern, isChorusMain: true, isSub, melodyStyle });
+            barTemplates.push(bar1);
+            const bar2 = varyMotifBar(bar1, { key, rangeInfo, strength: 'light' });
+            barTemplates.push(bar2);
+            let bar3 = sequenceMotifBar(bar1, { key, rangeInfo, direction: (Math.random() < 0.5 ? 2 : -2) });
+            bar3 = varyMotifBar(bar3, { key, rangeInfo, strength: 'medium' });
+            barTemplates.push(bar3);
+            const bar4 = makeCadentialMotifBar(bar1, { key, rangeInfo });
+            barTemplates.push(bar4);
+
+            for (let barIndex = 0; barIndex < motifBars; barIndex++) {
+                const tpl = barTemplates[Math.min(barIndex, barTemplates.length - 1)];
+                tpl.forEach(nBar => {
+                    notes.push({
+                        midi: nBar.midi,
+                        startOffset: barIndex * beatsPerBar + nBar.pos,
+                        duration: nBar.duration,
+                        velocity: nBar.velocity
+                    });
+                });
+            }
+        } else {
+            let prevMidi = null;
+            let prevInterval = null;
+            const pitchHistory = [];
+
+            for (let bar = 0; bar < totalBars; bar++) {
+                const pattern = pickMotifRhythm(density, false);
+                let t = 0;
+                for (let i = 0; i < pattern.length; i++) {
+                    const dur = pattern[i];
+                    const strong = (Math.abs(t - 0) < 1e-6) || (Math.abs(t - 2) < 1e-6);
+                    let midi;
+                    if (prevMidi == null) {
+                        midi = chooseStartPitch(key, rangeInfo, false, isSub);
+                    } else {
+                        midi = chooseNextPitch(
+                            prevMidi,
+                            key,
+                            rangeInfo,
+                            strong,
+                            false,
+                            isSub,
+                            prevInterval,
+                            pitchHistory,
+                            melodyStyle
+                        );
+                    }
+                    midi = clampMidiToRange(quantizeToScale(midi, key), rangeInfo);
+                    const baseVel = isSub ? 0.78 : 0.82;
+                    const accent = strong ? 0.08 : 0;
+                    const v = Math.max(0.4, Math.min(1, baseVel + accent + (Math.random() * 0.05 - 0.025)));
+                    notes.push({
+                        midi,
+                        startOffset: bar * beatsPerBar + t,
+                        duration: dur,
+                        velocity: v
+                    });
+                    if (prevMidi != null) prevInterval = midi - prevMidi;
+                    prevMidi = midi;
+                    pitchHistory.push(midi);
+                    t += dur;
+                }
+            }
+
+            const phraseEndBeat = totalBars * beatsPerBar;
+            const phraseNotes = notes
+                .filter(n => n.startOffset >= phraseEndBeat - beatsPerBar && n.startOffset < phraseEndBeat + 1e-3);
+            if (phraseNotes.length) {
+                const last = phraseNotes.reduce((a, b) => a.startOffset >= b.startOffset ? a : b);
+                last.midi = closestPitchToPcSet(
+                    last.midi,
+                    [key.rootPc, (key.rootPc + 7) % 12],
+                    rangeInfo
+                );
+            }
+
+            imposeMotifRepetition(notes, totalBars, rangeInfo);
+        }
+
+        notes.sort((a, b) => a.startOffset - b.startOffset);
+        smoothMotifMelodicLeaps(notes, key, rangeInfo, isChorusMain);
+        return notes;
+    }
+
+    function buildSongStructure(totalBars) {
+        const pattern = [
+            { type: 'intro', length: 8, chords: 'chorus' },
+            { type: 'verse1', length: 16, chords: 'verse' },
+            { type: 'pre1', length: 8, chords: 'chorus' },
+            { type: 'chorus1', length: 16, chords: 'chorus' },
+            { type: 'verse2', length: 16, chords: 'verse' },
+            { type: 'pre2', length: 8, chords: 'chorus' },
+            { type: 'chorus2', length: 16, chords: 'chorus' },
+            { type: 'outro', length: 2, chords: 'chorus' }
+        ];
+        const structure = [];
+        let bar = 0;
+        for (const seg of pattern) {
+            if (bar >= totalBars) break;
+            let len = seg.length;
+            if (bar + len > totalBars) len = totalBars - bar;
+            structure.push({ ...seg, startBar: bar, length: len });
+            bar += len;
+        }
+        if (structure.length === 0) {
+            structure.push({ type: 'loop', chords: 'verse', startBar: 0, length: totalBars });
+        }
+        return structure;
+    }
+
+    function getSectionForBar(bar, structure) {
+        for (const s of structure) {
+            if (bar >= s.startBar && bar < s.startBar + s.length) return s;
+        }
+        return structure[structure.length - 1];
+    }
+
+    function getSectionForBeat(structure, beat) {
+        const bar = Math.floor(beat / 4);
+        return getSectionForBar(bar, structure);
+    }
+
+    function getChordAtBar(bar, structure, verseChords, chorusChords) {
+        const sec = getSectionForBar(bar, structure);
+        let chords;
+        if (sec.chords === 'chorus') chords = chorusChords.length ? chorusChords : verseChords;
+        else chords = verseChords.length ? verseChords : chorusChords;
+        if (!chords || chords.length === 0) return null;
+        const localIndex = bar - sec.startBar;
+        return chords[localIndex % chords.length];
+    }
+
+    function pickCadentialPitch(currentMidi, chord, key, rangeInfo) {
+        if (!chord) return currentMidi;
+        const tonicPc = key.rootPc;
+        const chordRootPc = chord.rootPc;
+        const thirdInterval = chord.quality === 'maj' ? 4 : 3;
+        const chordThirdPc = (chordRootPc + thirdInterval) % 12;
+        let targetPcs;
+        if (chordRootPc === tonicPc) {
+            targetPcs = [tonicPc, chordThirdPc];
+        } else {
+            targetPcs = [chordRootPc, chordThirdPc];
+        }
+        return closestPitchToPcSet(currentMidi, targetPcs, rangeInfo);
+    }
+
+    function stampMotifAcrossSection(
+        motif,
+        motifBars,
+        section,
+        partTag,
+        key,
+        structure,
+        verseChords,
+        chorusChords,
+        rangeInfo,
+        offsetBeats = 0
+    ) {
+        const out = [];
+        const motifBeats = motifBars * 4;
+        if (motifBeats <= 0) return out;
+        const sectionStartBeat = section.startBar * 4;
+        const sectionEndBeat = (section.startBar + section.length) * 4;
+        const totalBeats = sectionEndBeat - sectionStartBeat;
+        const repeats = Math.ceil(totalBeats / motifBeats);
+
+        let lastMidi = null;
+
+        for (let r = 0; r < repeats; r++) {
+            const baseBeat = sectionStartBeat + r * motifBeats + offsetBeats;
+            motif.forEach(m => {
+                const localOffset = m.startOffset;
+                const start = baseBeat + localOffset;
+                if (start >= sectionEndBeat) return;
+                const end = start + m.duration;
+                if (end <= sectionStartBeat) return;
+                const barIndex = Math.floor(start / 4);
+                const chord = getChordAtBar(barIndex, structure, verseChords, chorusChords);
+                const localBeatWithinBar = start - barIndex * 4;
+                const isStrong = (Math.abs(localBeatWithinBar - 0) < 1e-3) || (Math.abs(localBeatWithinBar - 2) < 1e-3);
+
+                let midi = m.midi;
+                const isPhraseEnd = (localOffset + m.duration >= motifBeats - 0.25);
+
+                const ctx = {
+                    key,
+                    chord,
+                    beatInBar: localBeatWithinBar,
+                    isCadence: isPhraseEnd,
+                    prevMidi: lastMidi,
+                    currMidi: midi,
+                    sectionType: section.type,
+                    isStrong
+                };
+                midi = refineNoteWithHarmony(midi, ctx);
+                midi = clampMidiToRange(midi, rangeInfo);
+
+                if (isPhraseEnd) {
+                    midi = pickCadentialPitch(midi, chord, key, rangeInfo);
+                }
+
+                out.push({
+                    midi,
+                    start,
+                    duration: m.duration,
+                    velocity: m.velocity,
+                    part: partTag
+                });
+                lastMidi = midi;
+            });
+        }
+        return out;
+    }
+
+    function chooseBassRootMidi(rootPc, prevRootMidi) {
+        const candidates = [];
+        for (let o = 1; o <= 4; o++) candidates.push(o * 12 + rootPc);
+        if (prevRootMidi == null) return 2 * 12 + rootPc;
+        let best = candidates[0], bestDist = 1e9;
+        candidates.forEach(c => {
+            const d = Math.abs(c - prevRootMidi);
+            if (d < bestDist) { bestDist = d; best = c; }
+        });
+        return best;
+    }
+
+    function choosePadRootMidi(rootPc, prevRootMidi) {
+        const candidates = [];
+        for (let o = 3; o <= 6; o++) candidates.push(o * 12 + rootPc);
+        if (prevRootMidi == null) return 4 * 12 + rootPc;
+        let best = candidates[0], bestDist = 1e9;
+        candidates.forEach(c => {
+            const d = Math.abs(c - prevRootMidi);
+            if (d < bestDist) { bestDist = d; best = c; }
+        });
+        return best;
+    }
+
+    function chooseBassPatternForSection(secType) {
+        if (secType === 'intro') return randomChoice(['sustain', 'halfNotes']);
+        if (secType === 'outro') return 'sustain';
+        if (secType.startsWith('pre')) return randomChoice(['build8ths', 'groove']);
+        if (secType.startsWith('chorus')) return randomChoice(['rock8ths', 'octaveJump', 'halfNotes']);
+        if (secType.startsWith('verse')) return randomChoice(['sustain', 'groove', 'halfNotes']);
+        return randomChoice(['sustain', 'groove']);
+    }
+
+    function generateBassPatternForBar(pattern, { bar, chord, sec, key, prevRootMidi }) {
+        const notes = [];
+        const barStart = bar * 4;
+        const rootMidi = chooseBassRootMidi(chord.rootPc, prevRootMidi);
+        const fifthMidi = rootMidi + 7;
+        const octaveMidi = rootMidi + 12;
+        let baseVel = 0.7;
+        if (sec.type.startsWith('chorus')) baseVel = 0.82;
+        else if (sec.type.startsWith('pre')) baseVel = 0.75;
+        else if (sec.type === 'intro' || sec.type === 'outro') baseVel = 0.6;
+
+        const add = (m, start, dur, vMul = 1.0) => {
+            notes.push({
+                midi: clampMidiToRange(m, { minMidi: 28, maxMidi: 72 }),
+                start,
+                duration: dur,
+                velocity: Math.max(0.3, Math.min(1, baseVel * vMul)),
+                part: 'auto_bass'
+            });
+        };
+
+        if (pattern === 'sustain') {
+            add(rootMidi, barStart, 3.9, 0.9);
+        } else if (pattern === 'halfNotes') {
+            add(rootMidi, barStart, 2, 0.9);
+            add(fifthMidi, barStart + 2, 2, 0.85);
+        } else if (pattern === 'groove') {
+            add(rootMidi, barStart + 0, 0.95, 0.9);
+            add(fifthMidi, barStart + 1, 0.95, 0.85);
+            add(rootMidi, barStart + 2, 0.95, 0.9);
+            add(fifthMidi, barStart + 3, 0.95, 0.85);
+        } else if (pattern === 'rock8ths') {
+            const seq = [rootMidi, rootMidi, fifthMidi, fifthMidi, octaveMidi, fifthMidi, rootMidi, fifthMidi];
+            for (let i = 0; i < 8; i++) {
+                add(seq[i], barStart + i * 0.5, 0.45, 0.9);
+            }
+        } else if (pattern === 'octaveJump') {
+            add(rootMidi, barStart + 0, 0.95, 0.9);
+            add(octaveMidi, barStart + 1, 0.95, 0.85);
+            add(rootMidi, barStart + 2, 0.95, 0.9);
+            add(fifthMidi, barStart + 3, 0.95, 0.85);
+        } else if (pattern === 'build8ths') {
+            const seq = [rootMidi, rootMidi, fifthMidi, fifthMidi, rootMidi, fifthMidi, octaveMidi, octaveMidi];
+            for (let i = 0; i < 8; i++) {
+                add(seq[i], barStart + i * 0.5, 0.45, 0.95);
+            }
+        } else {
+            add(rootMidi, barStart, 3.9, 0.9);
+        }
+
+        return { notes, rootMidi };
+    }
+
+    function choosePadPatternForSection(secType) {
+        if (secType === 'intro') return randomChoice(['pad', 'pushChop']);
+        if (secType === 'outro') return 'pad';
+        if (secType.startsWith('pre')) return randomChoice(['broken8', 'arp16', 'pad']);
+        if (secType.startsWith('chorus')) return randomChoice(['power', 'pushChop', 'broken8', 'pad']);
+        if (secType.startsWith('verse')) return randomChoice(['pad', 'pushChop', 'broken8']);
+        return randomChoice(['pad', 'pushChop']);
+    }
+
+    function generatePadPatternForBar(pattern, { bar, chord, sec, key, prevPadRootMidi }) {
+        const notes = [];
+        const barStart = bar * 4;
+        const rootMidi = choosePadRootMidi(chord.rootPc, prevPadRootMidi);
+        const triad = chord.intervals.map(intv => rootMidi + intv);
+        const fifthMidi = rootMidi + 7;
+        const upperRoot = rootMidi + 12;
+        let baseVel = 0.4;
+        if (sec.type.startsWith('chorus')) baseVel = 0.55;
+        else if (sec.type.startsWith('pre')) baseVel = 0.5;
+        else if (sec.type === 'intro') baseVel = 0.35;
+
+        const add = (m, start, dur, vMul = 1.0) => {
+            notes.push({
+                midi: clampMidiToRange(m, { minMidi: 40, maxMidi: 96 }),
+                start,
+                duration: dur,
+                velocity: Math.max(0.25, Math.min(1, baseVel * vMul)),
+                part: 'auto_pad'
+            });
+        };
+
+        if (pattern === 'pad') {
+            const useFullTriad = !(sec.type === 'intro' || sec.type.startsWith('verse')) || Math.random() < 0.6;
+            if (useFullTriad) {
+                triad.forEach(m => add(m, barStart, 3.95, 1.0));
+                add(upperRoot, barStart, 3.95, 0.9);
+            } else {
+                add(rootMidi, barStart, 3.95, 0.9);
+                add(fifthMidi, barStart, 3.95, 0.9);
+                add(upperRoot, barStart, 3.95, 0.85);
+            }
+        } else if (pattern === 'pushChop') {
+            const hits = [0, 1.5, 2, 3.5];
+            hits.forEach((beat, idx) => {
+                const dur = 0.7;
+                triad.forEach(m => add(m, barStart + beat, dur, 0.95 + (idx * 0.03)));
+            });
+        } else if (pattern === 'broken8') {
+            const seq = [
+                triad[0], triad[1], triad[2], triad[1],
+                triad[0], triad[1], triad[2], upperRoot
+            ];
+            for (let i = 0; i < seq.length; i++) {
+                add(seq[i], barStart + i * 0.5, 0.45, 0.9 + i * 0.02);
+            }
+        } else if (pattern === 'arp16') {
+            const seq = [
+                triad[0], triad[1], triad[2], upperRoot,
+                triad[2], triad[1], triad[0], triad[1],
+                triad[2], upperRoot, triad[2], triad[1],
+                triad[0], triad[1], triad[2], upperRoot
+            ];
+            for (let i = 0; i < seq.length; i++) {
+                add(seq[i], barStart + i * 0.25, 0.2, 0.9 + i * 0.01);
+            }
+        } else if (pattern === 'power') {
+            add(rootMidi, barStart + 0, 3.95, 0.95);
+            add(fifthMidi, barStart + 0, 3.95, 0.95);
+            add(upperRoot, barStart + 0, 3.95, 0.9);
+        } else {
+            triad.forEach(m => add(m, barStart, 3.95, 1.0));
+        }
+
+        return { notes, padRootMidi: rootMidi };
+    }
+
+    // === Bass：Intro 前兩小節高機率不進來，Outtro 也偏薄 ===
+    function generateBassLineForStructure({ key, structure, verseChords, chorusChords, totalBars }) {
+        const notes = [];
+        let prevRootMidi = null;
+        const sectionPatternCache = new Map();
+        for (let bar = 0; bar < totalBars; bar++) {
+            const sec = getSectionForBar(bar, structure);
+            const chord = getChordAtBar(bar, structure, verseChords, chorusChords);
+            if (!chord) continue;
+
+            let pattern;
+            const introRelBar = bar - sec.startBar;
+            if (sec.type === 'intro' && introRelBar < 2) {
+                if (Math.random() < 0.8) continue;
+                pattern = 'sustain';
+            }
+
+            if (!pattern) {
+                const secKey = sec.type + '_' + sec.startBar;
+                pattern = sectionPatternCache.get(secKey);
+                if (!pattern) {
+                    pattern = chooseBassPatternForSection(sec.type);
+                    sectionPatternCache.set(secKey, pattern);
+                }
+            }
+
+            const { notes: barNotes, rootMidi } = generateBassPatternForBar(pattern, { bar, chord, sec, key, prevRootMidi });
+            if (barNotes.length) {
+                notes.push(...barNotes);
+                prevRootMidi = rootMidi;
+            }
+        }
+        return notes;
+    }
+
+    // === Pad：Intro 前兩小節高機率不進來，Outtro 只保留第一小節 pad ===
+    function generatePadChordsForStructure({ key, structure, verseChords, chorusChords, totalBars }) {
+        const notes = [];
+        let prevPadRootMidi = null;
+        const sectionPatternCache = new Map();
+        for (let bar = 0; bar < totalBars; bar++) {
+            const sec = getSectionForBar(bar, structure);
+            const chord = getChordAtBar(bar, structure, verseChords, chorusChords);
+            if (!chord) continue;
+
+            if (sec.type === 'outro' && bar > sec.startBar) continue;
+
+            let pattern;
+            const introRelBar = bar - sec.startBar;
+            if (sec.type === 'intro' && introRelBar < 2) {
+                if (Math.random() < 0.7) continue;
+                pattern = randomChoice(['pad', 'pushChop']);
+            }
+
+            if (!pattern) {
+                const secKey = sec.type + '_' + sec.startBar;
+                pattern = sectionPatternCache.get(secKey);
+                if (!pattern) {
+                    pattern = choosePadPatternForSection(sec.type);
+                    sectionPatternCache.set(secKey, pattern);
+                }
+            }
+
+            const { notes: barNotes, padRootMidi } = generatePadPatternForBar(pattern, { bar, chord, sec, key, prevPadRootMidi });
+            if (barNotes.length) {
+                notes.push(...barNotes);
+                prevPadRootMidi = padRootMidi;
+            }
+        }
+        return notes;
+    }
+
+    // === Melody 裝飾：Neighbor / Passing ornaments ===
+    function addMelodicOrnaments(melodyNotes, key, structure) {
+        const result = [];
+        const sorted = melodyNotes.slice().sort((a, b) => a.start - b.start);
+
+        sorted.forEach(n => {
+            const sec = getSectionForBeat(structure, n.start);
+            const sectionType = sec ? sec.type : '';
+            const activeSection =
+                sectionType.startsWith('verse') ||
+                sectionType.startsWith('pre') ||
+                sectionType.startsWith('chorus');
+            const allowOrn = activeSection && n.duration >= 0.5;
+
+            if (allowOrn && Math.random() < 0.22) {
+                const before = Math.random() < 0.5;
+                let ornStart;
+                const sectionStartBeat = sec.startBar * 4;
+                if (before) {
+                    ornStart = Math.max(sectionStartBeat, n.start - ORNAMENT_NOTE_DURATION);
+                } else {
+                    ornStart = n.start + n.duration * 0.6;
+                    if (ornStart + ORNAMENT_NOTE_DURATION > n.start + n.duration) {
+                        ornStart = n.start + n.duration - ORNAMENT_NOTE_DURATION;
+                    }
+                }
+
+                if (ornStart + ORNAMENT_NOTE_DURATION <= n.start + n.duration + 1e-4 &&
+                    ornStart >= sectionStartBeat) {
+                    let dir = Math.random() < 0.5 ? -1 : 1;
+                    let ornMidi = quantizeToScale(n.midi + dir, key);
+                    const orn = {
+                        midi: ornMidi,
+                        start: ornStart,
+                        duration: ORNAMENT_NOTE_DURATION,
+                        velocity: Math.min(1, n.velocity + 0.05),
+                        part: (n.part || 'auto_hook') + '_orn'
+                    };
+                    result.push(orn);
+                }
+            }
+            result.push(n);
+        });
+
+        return result.sort((a, b) => a.start - b.start);
+    }
+
+    // === Section 前 pickup notes ===
+    function addSectionPickups(melodyNotes, key, structure) {
+        const result = melodyNotes.slice();
+        const byStart = melodyNotes.slice().sort((a, b) => a.start - b.start);
+
+        structure.forEach(sec => {
+            if (!(sec.type.startsWith('verse') || sec.type.startsWith('chorus'))) return;
+            if (sec.startBar === 0) return;
+
+            const sectionStart = sec.startBar * 4;
+            const firstNote = byStart.find(n => n.start >= sectionStart && n.start < sectionStart + 2);
+            if (!firstNote) return;
+
+            const hasPickup = byStart.some(n =>
+                n.start >= sectionStart - 0.5 && n.start < sectionStart && (n.part || '').includes('pickup')
+            );
+            if (hasPickup) return;
+
+            const pickupStart = sectionStart - 0.5;
+            if (pickupStart < 0) return;
+
+            const baseMidi = firstNote.midi;
+            const pickupMidi = quantizeToScale(baseMidi + (Math.random() < 0.5 ? -2 : -1), key);
+
+            result.push({
+                midi: pickupMidi,
+                start: pickupStart,
+                duration: 0.5 - ORNAMENT_NOTE_DURATION,
+                velocity: Math.max(0.4, firstNote.velocity * 0.8),
+                part: 'auto_hook_pickup'
+            });
+        });
+
+        return result.sort((a, b) => a.start - b.start);
+    }
+
+    // === Chorus 高八度雙主旋 ===
+    function addChorusOctaveDoubling(melodyNotes, structure) {
+        const extra = [];
+        melodyNotes.forEach(n => {
+            const sec = getSectionForBeat(structure, n.start);
+            if (!sec || !sec.type.startsWith('chorus')) return;
+            if (!n.part || !n.part.includes('chorus_main')) return;
+            if (n.duration < 0.5) return;
+            if (Math.random() > 0.35) return;
+            const hiMidi = n.midi + 12;
+            if (hiMidi > 96) return;
+            extra.push({
+                ...n,
+                midi: hiMidi,
+                velocity: Math.max(0.35, n.velocity * 0.7),
+                part: n.part + '_oct'
+            });
+        });
+        return melodyNotes.concat(extra).sort((a, b) => a.start - b.start);
+    }
+
+    // === Chorus phrase-end fills ===
+    function addPhraseEndFills(melodyNotes, key, structure) {
+        const result = melodyNotes.slice();
+        const extra = [];
+
+        structure.forEach(sec => {
+            if (!sec.type.startsWith('chorus')) return;
+            const secStart = sec.startBar * 4;
+            const secEnd = (sec.startBar + sec.length) * 4;
+            const lastBeatStart = secEnd - 1;
+
+            const notesInLastBeat = melodyNotes.filter(n => n.start >= lastBeatStart && n.start < secEnd);
+            if (notesInLastBeat.length > 0) return;
+
+            const secNotes = melodyNotes.filter(n => n.start >= secStart && n.start < secEnd);
+            if (!secNotes.length) return;
+
+            const anchor = secNotes.reduce((a, b) => a.start >= b.start ? a : b);
+            let curStart = secEnd - 1.5;
+            let curMidi = anchor.midi;
+            const stepDur = 0.5;
+
+            for (let i = 0; i < 3; i++) {
+                if (curStart >= secEnd) break;
+                curMidi = quantizeToScale(curMidi - 2, key);
+                extra.push({
+                    midi: curMidi,
+                    start: curStart,
+                    duration: stepDur,
+                    velocity: Math.min(1, anchor.velocity * 0.9),
+                    part: 'auto_hook_fill'
+                });
+                curStart += stepDur;
+            }
+        });
+
+        return result.concat(extra).sort((a, b) => a.start - b.start);
+    }
+
+    function postProcessMelodyNotes(melodyNotes, key, structure) {
+        let res = melodyNotes;
+        res = addMelodicOrnaments(res, key, structure);
+        res = addSectionPickups(res, key, structure);
+        res = addChorusOctaveDoubling(res, structure);
+        res = addPhraseEndFills(res, key, structure);
+        return res;
+    }
+
+    function generateSongMelodies({ key, verseChords, chorusChords, hookBars, totalBars, density, range, genBass, genChords }) {
+        const structure = buildSongStructure(totalBars);
+
+        const verseRangeInfo = getRangeInfo(key, 'mid');
+        const chorusMainRangeInfo = getRangeInfo(key, range);
+        const chorusSubRangeInfo = getRangeInfo(key, 'high');
+
+        const verseMotifBars = Math.min(hookBars, 4);
+        const chorusMotifBars = Math.min(hookBars, 4);
+
+        const verseStyle = randomChoice(['smooth', 'hooky']);
+        const chorusStyle = randomChoice(MELODY_STYLES);
+
+        const verseMotif = generateMotifNotes({
+            key,
+            bars: verseMotifBars,
+            density: 'medium',
+            rangeInfo: verseRangeInfo,
+            isChorusMain: false,
+            isSub: false,
+            style: verseStyle
+        });
+
+        const chorusMainMotif = generateMotifNotes({
+            key,
+            bars: chorusMotifBars,
+            density,
+            rangeInfo: chorusMainRangeInfo,
+            isChorusMain: true,
+            isSub: false,
+            style: chorusStyle
+        });
+
+        const chorusSubMotif = generateMotifNotes({
+            key,
+            bars: chorusMotifBars,
+            density: 'sparse',
+            rangeInfo: chorusSubRangeInfo,
+            isChorusMain: false,
+            isSub: true,
+            style: 'smooth'
+        });
+
+        const melodyNotes = [];
+
+        for (const sec of structure) {
+            if (sec.type === 'intro') {
+                if (Math.random() < 0.6) {
+                    melodyNotes.push(
+                        ...stampMotifAcrossSection(
+                            verseMotif,
+                            verseMotifBars,
+                            sec,
+                            'auto_hook_intro',
+                            key,
+                            structure,
+                            verseChords,
+                            chorusChords,
+                            verseRangeInfo,
+                            0
+                        )
+                    );
+                }
+            } else if (sec.type.startsWith('verse')) {
+                melodyNotes.push(
+                    ...stampMotifAcrossSection(
+                        verseMotif,
+                        verseMotifBars,
+                        sec,
+                        'auto_hook_verse_main',
+                        key,
+                        structure,
+                        verseChords,
+                        chorusChords,
+                        verseRangeInfo,
+                        0
+                    )
+                );
+            } else if (sec.type.startsWith('chorus')) {
+                melodyNotes.push(
+                    ...stampMotifAcrossSection(
+                        chorusMainMotif,
+                        chorusMotifBars,
+                        sec,
+                        'auto_hook_chorus_main',
+                        key,
+                        structure,
+                        verseChords,
+                        chorusChords,
+                        chorusMainRangeInfo,
+                        0
+                    )
+                );
+                melodyNotes.push(
+                    ...stampMotifAcrossSection(
+                        chorusSubMotif,
+                        chorusMotifBars,
+                        sec,
+                        'auto_hook_chorus_sub',
+                        key,
+                        structure,
+                        verseChords,
+                        chorusChords,
+                        chorusSubRangeInfo,
+                        0.5
+                    )
+                );
+            } else if (sec.type.startsWith('pre')) {
+                melodyNotes.push(
+                    ...stampMotifAcrossSection(
+                        chorusMainMotif,
+                        chorusMotifBars,
+                        sec,
+                        'auto_hook_pre',
+                        key,
+                        structure,
+                        verseChords,
+                        chorusChords,
+                        chorusMainRangeInfo,
+                        0
+                    )
+                );
+            } else if (sec.type === 'outro') {
+                melodyNotes.push(
+                    ...stampMotifAcrossSection(
+                        verseMotif,
+                        verseMotifBars,
+                        sec,
+                        'auto_hook_outro',
+                        key,
+                        structure,
+                        verseChords,
+                        chorusChords,
+                        verseRangeInfo,
+                        0
+                    )
+                );
+            }
+        }
+
+        let arrangementNotes = [];
+        if (genBass) {
+            arrangementNotes.push(
+                ...generateBassLineForStructure({ key, structure, verseChords, chorusChords, totalBars })
+            );
+        }
+        if (genChords) {
+            arrangementNotes.push(
+                ...generatePadChordsForStructure({ key, structure, verseChords, chorusChords, totalBars })
+            );
+        }
+
+        const processedMelody = postProcessMelodyNotes(melodyNotes, key, structure);
+
+        return { melodyNotes: processedMelody, arrangementNotes };
+    }
+
+    function applyAutoComposition(melodyNotes, arrangementNotes) {
+        STATE.notes = STATE.notes.filter(n => !(n.part && n.part.startsWith('auto_')));
+
+        const allNew = [...melodyNotes, ...arrangementNotes];
+        allNew.forEach(n => {
+            const row = getRowFromMidi(n.midi);
+            STATE.notes.push({
+                id: generateNoteId(),
+                row,
+                start: n.start,
+                duration: n.duration,
+                velocity: n.velocity,
+                part: n.part
+            });
+        });
+
+        drawNotes();
+        drawVelocityLane();
+        syncTransport();
+        STATE.hasPendingHistorySnapshot = true;
+        captureHistorySnapshot();
+    }
+
+    function normalizeProgressString(str) {
+        return str.replace(/\s+/g, ' ').trim();
+    }
+
+    const MAJOR_VERSE_PRESETS = [
+        "I | V | vi | IV",
+        "I | IV | V | I",
+        "vi | IV | I | V",
+        "I | V | IV | V",
+        "I | iii | vi | IV"
+    ];
+
+    const MAJOR_CHORUS_PRESETS = [
+        "I | V | vi | IV",
+        "I | V | IV | V",
+        "I | iii | vi | IV",
+        "IV | V | I",
+        "I | V | vi | iii | IV | I | IV | V"
+    ];
+
+    const MINOR_VERSE_PRESETS = [
+        "i | VI | III | VII",
+        "i | VII | VI | VII",
+        "i | iv | VI | VII",
+        "i | v | VI | III"
+    ];
+
+    const MINOR_CHORUS_PRESETS = [
+        "i | VI | III | VII",
+        "i | VII | VI | VII",
+        "i | III | VII | VI",
+        "i | iv | VI | VII | i"
+    ];
+
+    function randomFunctionalProgression(key, isChorus) {
+        const mode = key.mode;
+
+        const usePreset = Math.random() < (isChorus ? 0.6 : 0.4);
+        if (usePreset) {
+            if (mode === 'major') {
+                return (isChorus ? randomChoice(MAJOR_CHORUS_PRESETS) : randomChoice(MAJOR_VERSE_PRESETS));
+            } else {
+                return (isChorus ? randomChoice(MINOR_CHORUS_PRESETS) : randomChoice(MINOR_VERSE_PRESETS));
+            }
+        }
+
+        const T = (mode === 'major') ? ['I', 'vi', 'iii'] : ['i', 'VI', 'III'];
+        const P = (mode === 'major') ? ['ii', 'IV'] : ['ii', 'iv', 'VI'];
+        const D = (mode === 'major') ? ['V'] : ['V', 'VII'];
+
+        const funcMap = new Map();
+        T.forEach(n => funcMap.set(n, 'T'));
+        P.forEach(n => funcMap.set(n, 'P'));
+        D.forEach(n => funcMap.set(n, 'D'));
+
+        const minLen = isChorus ? 4 : 3;
+        const maxLen = isChorus ? 8 : 6;
+        const len = randomInt(minLen, maxLen);
+
+        const seq = [];
+
+        for (let i = 0; i < len; i++) {
+            if (i === 0) {
+                seq.push(randomChoice(T));
+            } else if (i === len - 1) {
+                const lastFunc = Math.random() < 0.7 ? 'T' : 'D';
+                const pool = lastFunc === 'T' ? T : D;
+                seq.push(randomChoice(pool));
+            } else {
+                const prev = seq[i - 1];
+                const prevF = funcMap.get(prev) || 'T';
+                let pool;
+                if (prevF === 'T') {
+                    pool = P.concat(T, D);
+                } else if (prevF === 'P') {
+                    pool = D.concat(T, P);
+                } else {
+                    pool = T.concat(P, D);
+                }
+                const uniq = Array.from(new Set(pool));
+                seq.push(randomChoice(uniq));
+            }
+        }
+
+        if (isChorus && seq.length <= maxLen - 2 && Math.random() < 0.4) {
+            seq.push('V');
+            seq.push(mode === 'major' ? 'I' : 'i');
+        }
+
+        return seq.join(' | ');
+    }
+
+    function autoGenerateFromUI() {
+        try {
+            const keyRoot = autoEls.keyRoot.value || 'C';
+            const keyMode = autoEls.keyMode.value || 'major';
+            let verseChordStr = autoEls.verseChords.value || DEFAULT_VERSE_PROGRESS;
+            let chorusChordStr = autoEls.chorusChords.value || DEFAULT_CHORUS_PROGRESS;
+            const hookBars = Math.max(1, (parseInt(autoEls.hookBars.value || '4', 10) || 4));
+            let totalBars = parseInt(autoEls.totalBars.value || '0', 10) || 0;
+            const density = autoEls.density.value || 'dense';
+            const range = autoEls.range.value || 'mid';
+            const genBass = autoEls.genBass.checked;
+            const genChords = autoEls.genChords.checked;
+
+            const key = parseKey(keyRoot, keyMode);
+            let verseChords = parseChordProgression(verseChordStr, key);
+            let chorusChords = parseChordProgression(chorusChordStr, key);
+
+            if (normalizeProgressString(verseChordStr) === normalizeProgressString(DEFAULT_VERSE_PROGRESS)) {
+                verseChords = mutateChordSequence(verseChords, key, 'verse');
+                autoEls.verseChords.value = chordSequenceToString(verseChords);
+            }
+            if (normalizeProgressString(chorusChordStr) === normalizeProgressString(DEFAULT_CHORUS_PROGRESS)) {
+                chorusChords = mutateChordSequence(chorusChords, key, 'chorus');
+                autoEls.chorusChords.value = chordSequenceToString(chorusChords);
+            }
+
+            if (verseChords.length === 0 || chorusChords.length === 0) {
+                alert('Verse or Chorus chord progression is empty/invalid.');
+                return;
+            }
+
+            if (!totalBars || totalBars <= 0) {
+                totalBars = 90;
+            }
+            totalBars = Math.max(8, Math.min(180, totalBars));
+            autoEls.totalBars.value = totalBars;
+
+            CONFIG.totalMeasures = totalBars;
+            recalcWorldDimensions();
+            resizeOverlayCanvases();
+
+            const { melodyNotes, arrangementNotes } = generateSongMelodies({
+                key,
+                verseChords,
+                chorusChords,
+                hookBars,
+                totalBars,
+                density,
+                range,
+                genBass,
+                genChords
+            });
+
+            applyAutoComposition(melodyNotes, arrangementNotes);
+        } catch (err) {
+            console.error(err);
+            alert('Auto compose failed: ' + err.message);
+        }
+    }
+
+    autoEls.generateBtn.addEventListener('click', autoGenerateFromUI);
+
+    function randomizeAutoParams() {
+        const roots = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+        const mode = Math.random() < 0.6 ? 'major' : 'minor';
+        const root = randomChoice(roots);
+
+        autoEls.keyRoot.value = root;
+        autoEls.keyMode.value = mode;
+
+        const key = parseKey(root, mode);
+
+        const verseProgStr = randomFunctionalProgression(key, false);
+        const chorusProgStr = randomFunctionalProgression(key, true);
+
+        autoEls.verseChords.value = verseProgStr;
+        autoEls.chorusChords.value = chorusProgStr;
+
+        const hookOptions = [1, 2, 4];
+        autoEls.hookBars.value = randomChoice(hookOptions);
+
+        const totalBars = randomInt(32, 128);
+        autoEls.totalBars.value = totalBars;
+
+        const densities = ['sparse', 'medium', 'dense'];
+        autoEls.density.value = randomChoice(densities);
+
+        const ranges = ['low', 'mid', 'high'];
+        autoEls.range.value = randomChoice(ranges);
+
+        autoEls.genBass.checked = Math.random() < 0.9;
+        autoEls.genChords.checked = Math.random() < 0.9;
+    }
+
+    autoEls.randomBtn.addEventListener('click', randomizeAutoParams);
+</script>
+</body>
+</html>
