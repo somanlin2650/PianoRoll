@@ -1010,6 +1010,20 @@
         didZoom: false
     };
 
+    /*
+     * ================================================================
+     * Auto Compose Pipeline (high-level overview)
+     * ================================================================
+     *  1. collectAutoComposeSettings   → read UI controls & normalize.
+     *  2. buildHarmonicTimeline        → expand structure + chord map + voicings.
+     *  3. buildRhythmPlan              → pick density-aware rhythm patterns.
+     *  4. generateSongMelodies         → melody engine (motifs + contours).
+     *  5. arrangeBassAndPads/drums     → harmonic layers following same plan.
+     *  6. normalizeAutoNoteDynamics    → velocity shaping per section/layer.
+     *  7. humanizeNoteTiming           → subtle micro timing for realism.
+     *  8. applyAutoComposition         → render notes back into the piano roll.
+     */
+
     function shouldUseLiteSampler() {
         const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
         const slowConn = conn && ['slow-2g', '2g', '3g'].includes(conn.effectiveType);
@@ -3563,6 +3577,71 @@
         return seq;
     }
 
+    const RHYTHM_PATTERN_LIBRARY = {
+        hook: {
+            sparse: [
+                [1,0,0,0, 0,0,1,0, 0,0,0,0, 0,1,0,0],
+                [1,0,0,0, 0,0,0,0, 0,1,0,0, 0,0,1,0],
+                [1,0,0,0, 0,0,1,0, 0,0,0,1, 0,0,0,0]
+            ],
+            medium: [
+                [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,1,0,0],
+                [1,0,0,1, 0,1,0,0, 0,1,0,0, 1,0,0,0],
+                [1,0,1,0, 0,1,0,0, 0,1,0,1, 0,0,1,0]
+            ],
+            dense: [
+                [1,0,1,0, 1,0,1,0, 0,1,0,1, 0,1,0,1],
+                [1,1,0,1, 0,1,1,0, 1,0,1,0, 1,0,1,0],
+                [1,0,1,1, 0,1,0,1, 0,1,0,1, 1,0,1,0]
+            ]
+        },
+        bass: {
+            sparse: [
+                [1,0,0,0, 0,0,0,0, 1,0,0,0, 0,0,0,0],
+                [1,0,0,0, 0,0,0,0, 0,0,1,0, 0,0,0,0]
+            ],
+            medium: [
+                [1,0,0,0, 0,0,1,0, 1,0,0,0, 0,1,0,0],
+                [1,0,0,0, 0,1,0,0, 1,0,0,0, 0,1,0,0]
+            ],
+            dense: [
+                [1,0,0,0, 0,1,0,0, 1,0,1,0, 0,1,0,0],
+                [1,0,1,0, 0,1,0,0, 1,0,1,0, 0,1,0,0]
+            ]
+        },
+        pad: {
+            sparse: [
+                [1,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0]
+            ],
+            medium: [
+                [1,0,0,0, 0,0,0,0, 1,0,0,0, 0,0,0,0],
+                [1,0,0,0, 0,0,0,0, 0,0,0,0, 1,0,0,0]
+            ],
+            dense: [
+                [1,0,0,0, 0,0,1,0, 0,0,0,0, 0,1,0,0],
+                [1,0,0,0, 0,1,0,0, 1,0,0,0, 0,1,0,0]
+            ]
+        },
+        arp: {
+            sparse: [
+                [1,0,0,0, 0,1,0,0, 1,0,0,0, 0,1,0,0]
+            ],
+            medium: [
+                [1,0,1,0, 0,1,0,1, 1,0,1,0, 0,1,0,1],
+                [1,0,0,1, 0,1,0,1, 1,0,0,1, 0,1,0,1]
+            ],
+            dense: [
+                [1,1,0,1, 1,1,0,1, 1,1,0,1, 1,1,0,1],
+                [1,0,1,1, 1,0,1,1, 1,0,1,1, 1,0,1,1]
+            ]
+        }
+    };
+
+    const VOICING_RANGES = {
+        bass: { minMidi: 33, maxMidi: 55 },
+        upper: { minMidi: 55, maxMidi: 82 }
+    };
+
     const RHYTHM_BANKS = {
         minimal: [
             [4],
@@ -3968,6 +4047,50 @@
             default:
                 return fallback;
         }
+    }
+
+    function pickRhythmPattern(kind, density, fallback = 'medium') {
+        const pools = RHYTHM_PATTERN_LIBRARY[kind];
+        if (!pools) return null;
+        const choices = pools[density] || pools[fallback] || Object.values(pools)[0];
+        if (!choices || choices.length === 0) return null;
+        return Array.isArray(choices[0]) ? randomChoice(choices) : choices.slice();
+    }
+
+    function expandPattern(pattern, bars = 1) {
+        if (!pattern) return null;
+        const result = [];
+        for (let i = 0; i < Math.max(1, bars); i++) {
+            result.push(...pattern);
+        }
+        return result;
+    }
+
+    function patternToEvents(pattern, step = 0.25) {
+        if (!pattern || !pattern.length) return [];
+        const events = [];
+        let i = 0;
+        while (i < pattern.length) {
+            const bit = pattern[i];
+            let len = 1;
+            while (i + len < pattern.length && pattern[i + len] === bit) len++;
+            events.push({ isRest: bit === 0, duration: len * step });
+            i += len;
+        }
+        return events;
+    }
+
+    function patternToSlots(pattern, step = 0.25) {
+        if (!pattern || !pattern.length) return [];
+        const slots = [];
+        for (let i = 0; i < pattern.length; i++) {
+            if (pattern[i] !== 1) continue;
+            let j = i + 1;
+            while (j < pattern.length && pattern[j] === 0) j++;
+            const duration = Math.max(step, (j - i) * step);
+            slots.push({ offset: i * step, duration });
+        }
+        return slots;
     }
 
     function pickRhythmBankForSection(profile, sectionType, density, { isHook = false } = {}) {
@@ -4755,12 +4878,43 @@
             const contrastMul =
                 profile?.motifComplexity === 'dense' ? 1.05 :
                     profile?.motifComplexity === 'sparse' ? 0.92 : 1;
-            const newVelocity = (baseVelocity * (1 - blend) + target * blend) * contrastMul;
+            const shaped = (baseVelocity * (1 - blend) + target * blend) * contrastMul;
+            const beatPos = ((note.start % 4) + 4) % 4;
+            const isStrong = beatPos < 0.05 || Math.abs(beatPos - 2) < 0.05;
+            const phraseShape = Math.sin(progress * Math.PI);
+            const phraseBoost = (phraseShape - 0.5) * 0.08;
+            const beatBoost = isStrong ? 0.05 : -0.015;
+            const apexBoost = partCat === 'melody'
+                ? Math.max(0, (note.midi - 70) * 0.007)
+                : 0;
+            const jitter = (Math.random() - 0.5) * 0.06;
+            const newVelocity = shaped + phraseBoost + beatBoost + apexBoost + jitter;
             note.velocity = clamp(
                 newVelocity,
                 Math.max(0.15, minTarget - 0.05),
                 Math.min(1, maxTarget + 0.08)
             );
+        });
+        return notes;
+    }
+
+    function humanizeNoteTiming(notes, bpm = STATE?.bpm || 120) {
+        if (!Array.isArray(notes)) return notes || [];
+        const beatDurationMs = 60000 / Math.max(30, bpm);
+        const maxShiftBeats = (15 / beatDurationMs);
+        notes.forEach(note => {
+            if (!note || !note.part) return;
+            if (note.part.includes('drum')) return;
+            const weight =
+                note.part.includes('bass') ? 0.4 :
+                note.part.includes('pad') ? 0.7 :
+                note.part.includes('orn') ? 1.1 :
+                1;
+            const shift = (Math.random() - 0.5) * maxShiftBeats * weight;
+            note.start = Math.max(0, note.start + shift);
+            if (note.duration != null) {
+                note.duration = Math.max(STATE.snapToGrid || 0.1, note.duration - Math.abs(shift) * 0.25);
+            }
         });
         return notes;
     }
@@ -4890,6 +5044,13 @@
         return sectionType;
     }
 
+    function resolveSectionDensity(profile, sectionType, fallbackDensity) {
+        const map = profile?.motifDensityMap || {};
+        const base = fallbackDensity || profile?.userDensity || 'medium';
+        const key = normalizeSectionKey(sectionType || '');
+        return map[key] || map.default || base;
+    }
+
     function getSectionForBar(bar, structure) {
         for (const s of structure) {
             if (bar >= s.startBar && bar < s.startBar + s.length) return s;
@@ -4910,6 +5071,79 @@
         if (!chords || chords.length === 0) return null;
         const localIndex = bar - sec.startBar;
         return chords[(localIndex % chords.length + chords.length) % chords.length];
+    }
+
+    function buildChordTimeline(structure, verseChords, chorusChords) {
+        const timeline = [];
+        structure.forEach(section => {
+            for (let i = 0; i < section.length; i++) {
+                const bar = section.startBar + i;
+                const chord = getChordAtBar(bar, structure, verseChords, chorusChords);
+                if (!chord) continue;
+                timeline.push({ bar, chord, section });
+            }
+        });
+        return timeline;
+    }
+
+    function buildVoicingTimeline(timeline, key) {
+        const voiced = [];
+        let prev = null;
+        timeline.forEach(entry => {
+            const voicing = voiceChordGreedy(entry.chord, prev, key);
+            voiced.push({ ...entry, voicing });
+            prev = voicing;
+        });
+        return voiced;
+    }
+
+    function voiceChordGreedy(chord, prevVoicing, key) {
+        const chordTones = getChordTonePcs(key, chord);
+        const upperTargets = chordTones.slice(0, 3);
+        while (upperTargets.length < 3) {
+            upperTargets.push(chord.rootPc);
+        }
+        const voices = upperTargets.map((pc, idx) => {
+            const anchor = prevVoicing?.voices?.[idx];
+            return closestMidiForPc(pc, VOICING_RANGES.upper, anchor);
+        }).sort((a, b) => a - b);
+
+        const leadingPc = (key.rootPc + 11) % 12;
+        for (let i = 0; i < voices.length; i++) {
+            const pc = ((voices[i] % 12) + 12) % 12;
+            if (pc === leadingPc && voices[i] + 1 <= VOICING_RANGES.upper.maxMidi) {
+                voices[i] += 1;
+            }
+        }
+
+        const bassAnchor = prevVoicing?.bass ?? null;
+        const bass = closestMidiForPc(chord.rootPc, VOICING_RANGES.bass, bassAnchor);
+        return { bass, voices };
+    }
+
+    function closestMidiForPc(pc, range, anchor) {
+        const candidates = [];
+        for (let oct = 1; oct <= 7; oct++) {
+            const midi = oct * 12 + pc;
+            if (midi < range.minMidi || midi > range.maxMidi) continue;
+            candidates.push(midi);
+        }
+        if (!candidates.length) {
+            return Math.max(range.minMidi, Math.min(range.maxMidi, pc + 60));
+        }
+        if (anchor == null) {
+            return candidates[Math.floor(candidates.length / 2)];
+        }
+        let best = candidates[0];
+        let bestDist = Math.abs(best - anchor);
+        for (const cand of candidates) {
+            const dist = Math.abs(cand - anchor);
+            if (dist < bestDist) {
+                best = cand;
+                bestDist = dist;
+            }
+        }
+        return best;
     }
 
     function pickCadentialPitch(currentMidi, chord, key, rangeInfo) {
@@ -5003,24 +5237,39 @@
         return pattern;
     }
 
-    function composeMotif({ id, bars, contour, density, syncopated, rangeInfo, energy, patternBank }) {
+    function composeMotif({ id, bars, contour, density, syncopated, rangeInfo, energy, patternBank, pattern }) {
         const beats = Math.max(1, bars) * 4;
-        let rhythm = patternBank ? buildRhythmFromBank(patternBank, bars) : null;
-        if (!rhythm || rhythm.length === 0) {
-            rhythm = createRhythmPattern(beats, density, { allowSyncopation: !!syncopated });
+        let events;
+        if (pattern && pattern.length) {
+            events = patternToEvents(pattern);
+        } else {
+            let rhythm = patternBank ? buildRhythmFromBank(patternBank, bars) : null;
+            if (!rhythm || rhythm.length === 0) {
+                rhythm = createRhythmPattern(beats, density, { allowSyncopation: !!syncopated });
+            }
+            events = rhythm.map(d => ({ isRest: false, duration: d }));
         }
-        const targets = createContourTargets(rhythm.length, contour, rangeInfo, energy);
+        const noteEvents = events.filter(evt => !evt.isRest);
+        const targets = createContourTargets(noteEvents.length, contour, rangeInfo, energy);
         let cursor = 0;
-        const notes = rhythm.map((dur, idx) => {
+        let melodicIdx = 0;
+        const notes = [];
+        events.forEach((evt, idx) => {
+            if (evt.isRest) {
+                cursor += evt.duration;
+                return;
+            }
+            const duration = evt.duration;
             const note = {
                 start: roundToGrid(cursor),
-                duration: dur,
-                target: targets[idx],
-                isCadence: idx === rhythm.length - 1,
+                duration,
+                target: targets[melodicIdx] ?? rangeInfo.centerMidi,
+                isCadence: idx === events.length - 1,
                 accent: isStrongBeat(cursor % 4)
             };
-            cursor += dur;
-            return note;
+            cursor += duration;
+            melodicIdx += 1;
+            notes.push(note);
         });
         return {
             id,
@@ -5150,12 +5399,13 @@
             : 'arch';
         const hookBias = profile.motifOptions?.hookRhythmBias || 'anthem';
         const hookPatternMap = {
-            syncopated: 'syncopated',
-            flow: 'lyric',
-            anthem: 'busy',
-            hook: 'busy'
+            syncopated: 'dense',
+            flow: 'medium',
+            anthem: 'dense',
+            hook: 'dense'
         };
-        const basePattern = hookPatternMap[hookBias] || 'busy';
+        const patternDensity = hookPatternMap[hookBias] || 'dense';
+        const basePattern = expandPattern(pickRhythmPattern('hook', patternDensity, 'dense'), bars);
         const base = composeMotif({
             id: 'hook_A',
             bars,
@@ -5164,7 +5414,7 @@
             syncopated: true,
             rangeInfo,
             energy,
-            patternBank: basePattern
+            pattern: basePattern
         });
         const clampTarget = (value) => Math.min(rangeInfo.maxMidi, Math.max(rangeInfo.minMidi, value));
         const variant = {
@@ -5178,7 +5428,10 @@
         const contourB = (profile.hookContours && profile.hookContours.length > 1)
             ? randomChoice(profile.hookContours.filter(c => c !== contourA)) || 'rise'
             : 'rise';
-        const secondaryPattern = profile.rhythmFlavor === 'half_time' ? 'syncopated' : 'busy';
+        const secondaryPattern = expandPattern(
+            pickRhythmPattern('hook', profile.rhythmFlavor === 'half_time' ? 'medium' : 'dense', 'dense'),
+            bars
+        );
         const contrast = composeMotif({
             id: 'hook_B',
             bars,
@@ -5187,7 +5440,7 @@
             syncopated: true,
             rangeInfo,
             energy: energy + 0.05,
-            patternBank: secondaryPattern
+            pattern: secondaryPattern
         });
         let callResponse = null;
         if (profile.variationPolicy?.callResponseChance && Math.random() < profile.variationPolicy.callResponseChance) {
@@ -5231,6 +5484,10 @@
 
         const verseContour = resolveContourForSection(profile, 'verse');
         const versePatternBank = pickRhythmBankForSection(profile, 'verse', getSectionDensity('verse'));
+        const versePattern = expandPattern(
+            pickRhythmPattern('hook', getSectionDensity('verse'), 'medium'),
+            2
+        );
         const verseMotifA = composeMotif({
             id: 'verse_A',
             bars: 2,
@@ -5239,7 +5496,8 @@
             syncopated: false,
             rangeInfo: verseRange,
             energy: 0.8,
-            patternBank: versePatternBank
+            patternBank: versePatternBank,
+            pattern: versePattern
         });
         const verseMotifB = varyMotif(verseMotifA, verseRange, 'answer') || composeMotif({
             id: 'verse_B',
@@ -5249,7 +5507,8 @@
             syncopated: false,
             rangeInfo: verseRange,
             energy: 0.75,
-            patternBank: versePatternBank
+            patternBank: versePatternBank,
+            pattern: versePattern
         });
         structure.forEach(section => {
             const rangeInfo = getRangeForSection(section, rangeSelection, analysis);
@@ -5287,6 +5546,10 @@
                 motifPlans.push({ section: section.type, motifs: motifSequence.map(m => (m && m.id) || 'verse') });
             } else if (section.type.startsWith('pre')) {
                 const prePatternBank = pickRhythmBankForSection(profile, 'pre', sectionDensity);
+                const prePattern = expandPattern(
+                    pickRhythmPattern('hook', sectionDensity, 'medium'),
+                    1
+                );
                 const preMotif = composeMotif({
                     id: 'pre',
                     bars: 1,
@@ -5295,7 +5558,8 @@
                     syncopated: true,
                     rangeInfo: preRange,
                     energy: 0.9,
-                    patternBank: prePatternBank
+                    patternBank: prePatternBank,
+                    pattern: prePattern
                 });
                 melodyNotes.push(...renderMotifSequence({
                     section,
@@ -5308,6 +5572,10 @@
                 motifPlans.push({ section: section.type, motifs: ['pre'] });
             } else if (section.type.startsWith('bridge')) {
                 const bridgePattern = pickRhythmBankForSection(profile, 'bridge', sectionDensity);
+                const bridgeContourPattern = expandPattern(
+                    pickRhythmPattern('hook', sectionDensity, 'medium'),
+                    2
+                );
                 const bridgeMotif = composeMotif({
                     id: 'bridge',
                     bars: 2,
@@ -5316,7 +5584,8 @@
                     syncopated: false,
                     rangeInfo,
                     energy: 0.7,
-                    patternBank: bridgePattern
+                    patternBank: bridgePattern,
+                    pattern: bridgeContourPattern
                 });
                 melodyNotes.push(...renderMotifSequence({
                     section,
@@ -5329,6 +5598,10 @@
                 motifPlans.push({ section: section.type, motifs: ['bridge'] });
             } else if (section.type === 'intro' || section.type === 'outro') {
                 const introPattern = pickRhythmBankForSection(profile, section.type, sectionDensity);
+                const introContourPattern = expandPattern(
+                    pickRhythmPattern('hook', sectionDensity, 'sparse'),
+                    1
+                );
                 const motif = composeMotif({
                     id: section.type,
                     bars: 1,
@@ -5337,7 +5610,8 @@
                     syncopated: false,
                     rangeInfo: introRange,
                     energy: 0.6,
-                    patternBank: introPattern
+                    patternBank: introPattern,
+                    pattern: introContourPattern
                 });
                 melodyNotes.push(...renderMotifSequence({
                     section,
@@ -5353,8 +5627,12 @@
         return { motifPlans, melodyNotes };
     }
 
-    function arrangeBassAndPads({ structure, analysis, genBass, genChords, profile }) {
+    function arrangeBassAndPads({ structure, analysis, genBass, genChords, profile, densitySetting, voicingTimeline }) {
         const arrangement = [];
+        const voicingMap = new Map();
+        (voicingTimeline || []).forEach(entry => {
+            voicingMap.set(entry.bar, entry.voicing);
+        });
         const bassRule = profile?.instrumentRules?.bass || (genBass ? 'full' : 'none');
         if (genBass && bassRule !== 'none') {
             arrangement.push(
@@ -5363,7 +5641,9 @@
                     structure,
                     verseChords: analysis.verseChords,
                     chorusChords: analysis.chorusChords,
-                    profile
+                    profile,
+                    densitySetting,
+                    voicingMap
                 })
             );
         }
@@ -5375,7 +5655,9 @@
                     structure,
                     verseChords: analysis.verseChords,
                     chorusChords: analysis.chorusChords,
-                    profile
+                    profile,
+                    densitySetting,
+                    voicingMap
                 })
             );
         }
@@ -5418,7 +5700,7 @@
         }, candidates[0]);
     }
 
-    function generateBassLineForStructure({ key, structure, verseChords, chorusChords, profile }) {
+    function generateBassLineForStructure({ key, structure, verseChords, chorusChords, profile, densitySetting, voicingMap }) {
         if (profile?.instrumentRules?.bass === 'none') return [];
         const notes = [];
         let prevRoot = null;
@@ -5431,6 +5713,8 @@
                 sec.type.startsWith('bridge'))
         );
         const bassEntryBar = firstPrimarySection ? firstPrimarySection.startBar : 0;
+
+        const fallbackDensity = densitySetting || profile?.userDensity || 'medium';
 
         structure.forEach(sec => {
             if (!shouldPlayInstrumentInSection(profile, 'bass', sec.type)) return;
@@ -5452,10 +5736,17 @@
                 const chord = getChordAtBar(bar, structure, verseChords, chorusChords);
                 if (!chord) continue;
                 const barStart = bar * 4;
-                const rootMidi = chooseBassRegister(chord.rootPc, prevRoot);
+                const voicing = voicingMap?.get(bar);
+                const sectionDensity = resolveSectionDensity(profile, sec.type, fallbackDensity);
+                const patternArray = expandPattern(
+                    pickRhythmPattern('bass', sectionDensity, 'medium'),
+                    1
+                );
+                const grooveSlots = patternToSlots(patternArray, 0.25);
+                const rootMidi = voicing?.bass ?? chooseBassRegister(chord.rootPc, prevRoot);
                 const fifthMidi = rootMidi + 7;
                 const octaveMidi = rootMidi + 12;
-                const pattern = pickBassPattern(sec.type, profile);
+                const groove = pickBassPattern(sec.type, profile);
                 const barsSinceEntry = Math.max(0, bar - bassEntryBar);
                 const entryFactor = Math.min(0.85, 0.3 + barsSinceEntry * 0.12);
                 const sectionPad =
@@ -5465,6 +5756,10 @@
                                 0.55;
                 const bassMasterAttenuation = 0.58;
                 const sectionProgress = clamp((bar - sec.startBar) / Math.max(1, sec.length), 0, 1);
+                const slotData = grooveSlots.length ? grooveSlots : [
+                    { offset: 0, duration: 1.5 },
+                    { offset: 2, duration: 1.5 }
+                ];
                 const pushNote = (midi, offset, duration, velocity, accent) => {
                     const dyn = computeSectionVelocityMultiplier(sec, 'bass', sectionProgress, !!accent);
                     notes.push({
@@ -5479,40 +5774,35 @@
                         part: 'auto_bass'
                     });
                 };
-                if (pattern === 'drive') {
-                    pushNote(rootMidi, 0, 1, 0.66, true);
-                    pushNote(fifthMidi, 1, 1, 0.56, false);
-                    pushNote(octaveMidi, 2, 1, 0.6, true);
-                    pushNote(rootMidi, 3, 1, 0.58, false);
-                } else if (pattern === 'build') {
-                    pushNote(rootMidi, 0, 1.5, 0.58, true);
-                    pushNote(rootMidi + 2, 1.5, 0.5, 0.48, false);
-                    pushNote(octaveMidi, 2, 1.5, 0.6, true);
-                } else if (pattern === 'pedal') {
-                    pushNote(rootMidi, 0, 4, 0.48, true);
-                } else if (pattern === 'walking') {
-                    const steps = [rootMidi, rootMidi + 2, rootMidi + (chord.quality === 'maj' ? 4 : 3), fifthMidi];
-                    steps.forEach((m, idx) => pushNote(m, idx, 1, 0.52 + idx * 0.02, idx === 0 || idx === 2));
-                } else if (pattern === '808') {
-                    pushNote(rootMidi, 0, 3, 0.7, true);
-                    pushNote(rootMidi - 5, 3, 1, 0.6, false);
-                } else if (pattern === 'interval') {
-                    pushNote(rootMidi, 0, 1.5, 0.64, true);
-                    pushNote(rootMidi + 12, 1.5, 1, 0.55, true);
-                    pushNote(rootMidi + 7, 2.5, 1.5, 0.58, false);
-                } else if (pattern === 'pad') {
-                    pushNote(rootMidi, 0, 4, 0.42, false);
-                } else {
-                    pushNote(rootMidi, 0, 2, 0.54, true);
-                    pushNote(fifthMidi, 2, 2, 0.5, false);
-                }
+                slotData.forEach((slot, idx) => {
+                    const accent = slot.offset < 0.01 || Math.abs(slot.offset - 2) < 0.05;
+                    let targetMidi = rootMidi;
+                    if (!accent) {
+                        if (groove === 'interval') {
+                            targetMidi = octaveMidi;
+                        } else if (groove === 'pedal') {
+                            targetMidi = rootMidi;
+                        } else if (groove === 'walking') {
+                            const variation = idx % 3 === 1
+                                ? rootMidi + (chord.quality === 'maj' ? 4 : 3)
+                                : fifthMidi;
+                            targetMidi = variation;
+                        } else {
+                            targetMidi = fifthMidi;
+                        }
+                    }
+                    const sustain = groove === 'pedal'
+                        ? Math.min(4, slot.duration + (4 - (slot.offset + slot.duration)))
+                        : Math.min(1.5, Math.max(0.35, slot.duration));
+                    pushNote(targetMidi, slot.offset, sustain, accent ? 0.64 : 0.5, accent);
+                });
                 prevRoot = rootMidi;
             }
         });
         return notes;
     }
 
-    function generatePadChordsForStructure({ key, structure, verseChords, chorusChords, profile }) {
+    function generatePadChordsForStructure({ key, structure, verseChords, chorusChords, profile, densitySetting, voicingMap }) {
         if (profile?.instrumentRules?.pads === 'none') return [];
         const notes = [];
         const padRange = { minMidi: 60, maxMidi: 98 };
@@ -5526,6 +5816,8 @@
         );
         const padEntryBar = firstPrimarySection ? firstPrimarySection.startBar : 0;
         const behavior = profile?.padBehavior || 'lush';
+
+        const fallbackDensity = densitySetting || profile?.userDensity || 'medium';
 
         structure.forEach(sec => {
             if (!shouldPlayInstrumentInSection(profile, 'pads', sec.type)) return;
@@ -5546,12 +5838,21 @@
                 const chord = getChordAtBar(bar, structure, verseChords, chorusChords);
                 if (!chord) continue;
                 const barStart = bar * 4;
-                const chordTones = getChordTonePcs(key, chord);
-                if (!chordTones.length) continue;
-                const baseOct = sec.type.startsWith('chorus') ? 5 : 4;
-                let sustain = sec.type.startsWith('chorus') ? 4 : 2;
-                if (behavior === 'stabs') sustain = 1.5;
-                if (behavior === 'plucks') sustain = 1;
+                const sectionDensity = resolveSectionDensity(profile, sec.type, fallbackDensity);
+                const padPattern = expandPattern(
+                    pickRhythmPattern('pad', sectionDensity, sec.type.startsWith('chorus') ? 'dense' : 'sparse'),
+                    1
+                );
+                const padSlots = patternToSlots(padPattern, 0.25);
+                const voices = (voicingMap?.get(bar)?.voices || []).slice();
+                if (!voices.length) {
+                    const chordTones = getChordTonePcs(key, chord);
+                    chordTones.slice(0, 3).forEach((pc, idx) => {
+                        const octave = sec.type.startsWith('chorus') ? 5 + Math.floor(idx / 2) : 4 + Math.floor(idx / 2);
+                        voices.push(clampMidiToRange(octave * 12 + pc, padRange));
+                    });
+                }
+                if (!voices.length) continue;
                 const part = 'auto_pad';
                 const sectionProgress = clamp((bar - sec.startBar) / Math.max(1, sec.length), 0, 1);
                 const dynMul = computeSectionVelocityMultiplier(sec, 'pad', sectionProgress, false);
@@ -5560,38 +5861,36 @@
                 if (behavior === 'stacked') baseVelocity = 0.55;
                 const velocity = clamp(baseVelocity * dynMul, 0.22, 0.55);
 
-                chordTones.forEach((pc, voice) => {
-                    const octaveOffset = voice >= 3 ? 1 : 0;
-                    let octave = baseOct + octaveOffset;
-                    if (voice === 0 && !sec.type.startsWith('chorus')) {
-                        octave += 1; // keep root above mid register outside chorus
+                const slots = padSlots.length ? padSlots : [{ offset: 0, duration: 4 }];
+                slots.forEach(slot => {
+                    let sustain = sec.type.startsWith('chorus') ? Math.max(2.5, slot.duration * 2) : Math.max(1.2, slot.duration * 1.2);
+                    if (behavior === 'stabs') sustain = Math.min(1.2, slot.duration);
+                    if (behavior === 'plucks') sustain = Math.min(0.75, slot.duration);
+                    voices.forEach((midi, idx) => {
+                        notes.push({
+                            midi: clampMidiToRange(midi, padRange),
+                            start: barStart + slot.offset,
+                            duration: sustain,
+                            velocity: idx === voices.length - 1 ? velocity + 0.02 : velocity,
+                            part
+                        });
+                    });
+                    if (sec.type.startsWith('chorus') || behavior === 'stacked') {
+                        const shimmer = clampMidiToRange(voices[voices.length - 1] + 12, padRange);
+                        notes.push({
+                            midi: shimmer,
+                            start: barStart + slot.offset,
+                            duration: Math.min(2, sustain),
+                            velocity: Math.max(0.25, velocity - 0.1),
+                            part: `${part}_shimmer`
+                        });
                     }
-                    let midi = octave * 12 + pc;
-                    midi = clampMidiToRange(midi, padRange);
-                    notes.push({
-                        midi,
-                        start: barStart,
-                        duration: sustain,
-                        velocity,
-                        part
-                    });
                 });
-
-                if (sec.type.startsWith('chorus') || behavior === 'stacked') {
-                    const highMidi = clampMidiToRange((baseOct + 1) * 12 + chordTones[0], padRange);
-                    notes.push({
-                        midi: highMidi,
-                        start: barStart,
-                        duration: sustain,
-                        velocity: Math.max(0.25, velocity - 0.1),
-                        part
-                    });
-                }
                 if (behavior === 'plucks') {
                     notes.push({
-                        midi: octaveMidiFromPc(chordTones[1], baseOct + 1),
+                        midi: clampMidiToRange((voices[0] || padRange.minMidi) + 12, padRange),
                         start: barStart + 1.5,
-                        duration: 0.5,
+                        duration: 0.4,
                         velocity: velocity + 0.05,
                         part: `${part}_accent`
                     });
@@ -5599,10 +5898,6 @@
             }
         });
         return notes;
-
-        function octaveMidiFromPc(pc, octave) {
-            return clampMidiToRange(octave * 12 + pc, padRange);
-        }
     }
 
     const DRUM_MIDI = {
@@ -6112,23 +6407,33 @@
     }
 
 
-    function generateSongMelodies({ key, verseChords, chorusChords, hookBars, totalBars, density, range, genBass, genChords, songProfile }) {
-        const profile = songProfile || buildSongProfile({
-            density,
-            range,
+    function generateSongMelodies(settings, precomputedPlan) {
+        const {
+            key,
+            verseChords,
+            chorusChords,
             hookBars,
             totalBars,
+            density,
+            range,
+            genBass,
+            genChords
+        } = settings;
+        const plan = precomputedPlan || buildHarmonicTimeline({
+            key,
+            verseChords,
+            chorusChords,
+            hookBars,
+            totalBars,
+            density,
+            range,
             genBass,
             genChords
         });
-        const decoratedChorus = decorateChorusChords(chorusChords, key, profile);
-        const analysis = analyzeKeyAndChords({
-            key,
-            verseChords,
-            chorusChords: decoratedChorus.length ? decoratedChorus : chorusChords
-        });
-        const structure = buildSongStructurePlan(totalBars, hookBars, profile);
-        applyIntentToStructure(structure, profile);
+        const profile = plan.profile;
+        const analysis = plan.analysis;
+        const structure = plan.structure;
+        const voicingTimeline = plan.voicingTimeline;
 
         const desiredRange = profile.userRange || range || 'mid';
         const chorusRange = getRangeInfo(key, desiredRange);
@@ -6170,7 +6475,9 @@
             analysis,
             genBass,
             genChords,
-            profile
+            profile,
+            densitySetting: density,
+            voicingTimeline
         });
 
         const earliestMelodyBeat = processedMelody.length
@@ -6207,6 +6514,8 @@
         const melodyWithTransitions = processedMelody.concat(transitionNotes);
         const normalizedMelody = normalizeAutoNoteDynamics(melodyWithTransitions, structure, profile);
         const normalizedArrangement = normalizeAutoNoteDynamics(arrangementNotes, structure, profile);
+        humanizeNoteTiming(normalizedMelody, STATE?.bpm || 120);
+        humanizeNoteTiming(normalizedArrangement, STATE?.bpm || 120);
 
         return {
             melodyNotes: normalizedMelody,
@@ -6329,69 +6638,88 @@
         return seq.join(' | ');
     }
 
+    function collectAutoComposeSettings() {
+        const keyRoot = autoEls.keyRoot.value || 'C';
+        const keyMode = autoEls.keyMode.value || 'major';
+        let verseChordStr = autoEls.verseChords.value || DEFAULT_VERSE_PROGRESS;
+        let chorusChordStr = autoEls.chorusChords.value || DEFAULT_CHORUS_PROGRESS;
+        const hookBars = Math.max(1, (parseInt(autoEls.hookBars.value || '4', 10) || 4));
+        let totalBars = parseInt(autoEls.totalBars.value || '0', 10) || 0;
+        const density = autoEls.density.value || 'dense';
+        const range = autoEls.range.value || 'mid';
+        const genBass = autoEls.genBass.checked;
+        const genChords = autoEls.genChords.checked;
+
+        const key = parseKey(keyRoot, keyMode);
+        let verseChords = parseChordProgression(verseChordStr, key);
+        let chorusChords = parseChordProgression(chorusChordStr, key);
+
+        if (normalizeProgressString(verseChordStr) === normalizeProgressString(DEFAULT_VERSE_PROGRESS)) {
+            verseChords = mutateChordSequence(verseChords, key, 'verse');
+            autoEls.verseChords.value = chordSequenceToString(verseChords);
+        }
+        if (normalizeProgressString(chorusChordStr) === normalizeProgressString(DEFAULT_CHORUS_PROGRESS)) {
+            chorusChords = mutateChordSequence(chorusChords, key, 'chorus');
+            autoEls.chorusChords.value = chordSequenceToString(chorusChords);
+        }
+
+        if (verseChords.length === 0 || chorusChords.length === 0) {
+            throw new Error('Verse or Chorus chord progression is empty/invalid.');
+        }
+
+        if (!totalBars || totalBars <= 0) {
+            totalBars = 90;
+        }
+        totalBars = clamp(totalBars, 8, 180);
+        autoEls.totalBars.value = totalBars;
+
+        return {
+            key,
+            verseChords,
+            chorusChords,
+            hookBars,
+            totalBars,
+            density,
+            range,
+            genBass,
+            genChords
+        };
+    }
+
+    function buildHarmonicTimeline(settings) {
+        const profile = buildSongProfile({
+            density: settings.density,
+            range: settings.range,
+            hookBars: settings.hookBars,
+            totalBars: settings.totalBars,
+            genBass: settings.genBass,
+            genChords: settings.genChords
+        });
+        const decoratedChorus = decorateChorusChords(settings.chorusChords, settings.key, profile);
+        const analysis = analyzeKeyAndChords({
+            key: settings.key,
+            verseChords: settings.verseChords,
+            chorusChords: decoratedChorus.length ? decoratedChorus : settings.chorusChords
+        });
+        const structure = buildSongStructurePlan(settings.totalBars, settings.hookBars, profile);
+        applyIntentToStructure(structure, profile);
+        const chordTimeline = buildChordTimeline(structure, analysis.verseChords, analysis.chorusChords);
+        const voicingTimeline = buildVoicingTimeline(chordTimeline, analysis.key);
+        return { profile, analysis, structure, chordTimeline, voicingTimeline };
+    }
+
     function autoGenerateFromUI() {
         try {
-            const keyRoot = autoEls.keyRoot.value || 'C';
-            const keyMode = autoEls.keyMode.value || 'major';
-            let verseChordStr = autoEls.verseChords.value || DEFAULT_VERSE_PROGRESS;
-            let chorusChordStr = autoEls.chorusChords.value || DEFAULT_CHORUS_PROGRESS;
-            const hookBars = Math.max(1, (parseInt(autoEls.hookBars.value || '4', 10) || 4));
-            let totalBars = parseInt(autoEls.totalBars.value || '0', 10) || 0;
-            const density = autoEls.density.value || 'dense';
-            const range = autoEls.range.value || 'mid';
-            const genBass = autoEls.genBass.checked;
-            const genChords = autoEls.genChords.checked;
+            const settings = collectAutoComposeSettings();
 
-            const key = parseKey(keyRoot, keyMode);
-            let verseChords = parseChordProgression(verseChordStr, key);
-            let chorusChords = parseChordProgression(chorusChordStr, key);
-
-            if (normalizeProgressString(verseChordStr) === normalizeProgressString(DEFAULT_VERSE_PROGRESS)) {
-                verseChords = mutateChordSequence(verseChords, key, 'verse');
-                autoEls.verseChords.value = chordSequenceToString(verseChords);
-            }
-            if (normalizeProgressString(chorusChordStr) === normalizeProgressString(DEFAULT_CHORUS_PROGRESS)) {
-                chorusChords = mutateChordSequence(chorusChords, key, 'chorus');
-                autoEls.chorusChords.value = chordSequenceToString(chorusChords);
-            }
-
-            if (verseChords.length === 0 || chorusChords.length === 0) {
-                alert('Verse or Chorus chord progression is empty/invalid.');
-                return;
-            }
-
-            if (!totalBars || totalBars <= 0) {
-                totalBars = 90;
-            }
-            totalBars = Math.max(8, Math.min(180, totalBars));
-            autoEls.totalBars.value = totalBars;
-
-            CONFIG.totalMeasures = totalBars;
+            CONFIG.totalMeasures = settings.totalBars;
             recalcWorldDimensions();
             resizeOverlayCanvases();
 
-            const songProfile = buildSongProfile({
-                density,
-                range,
-                hookBars,
-                totalBars,
-                genBass,
-                genChords
-            });
-            STATE.currentIntent = songProfile;
+            const harmonicPlan = buildHarmonicTimeline(settings);
+            STATE.currentIntent = harmonicPlan.profile;
 
-            const { melodyNotes, arrangementNotes } = generateSongMelodies({
-                key,
-                verseChords,
-                chorusChords,
-                hookBars,
-                totalBars,
-                density,
-                range,
-                genBass,
-                genChords,
-                songProfile
-            });
+            const { melodyNotes, arrangementNotes } = generateSongMelodies(settings, harmonicPlan);
 
             applyAutoComposition(melodyNotes, arrangementNotes);
         } catch (err) {
