@@ -1336,17 +1336,6 @@
         return toneResumePromise;
     }
 
-    function setupAudioUnlockOnGesture() {
-        const gestureEvents = ['pointerdown', 'touchstart', 'keydown'];
-        const unlock = () => {
-            ensureToneContextRunning();
-            gestureEvents.forEach(evt => window.removeEventListener(evt, unlock));
-        };
-        gestureEvents.forEach(evt => window.addEventListener(evt, unlock));
-    }
-
-    setupAudioUnlockOnGesture();
-
     async function initAudio() {
         await ensureToneContextRunning();
         Tone.Transport.bpm.value = STATE.bpm;
@@ -2858,11 +2847,12 @@
         resizeOverlayCanvases();
     });
 
-    els.initBtn?.addEventListener('click', () => {
+    els.initBtn?.addEventListener('click', async () => {
         els.startOverlay.classList.add('hidden');
         els.loading.classList.remove('hidden');
 
-        initAudio()
+        ensureToneContextRunning()
+            .then(initAudio)
             .then(() => {
                 initUI();
                 syncTransport();
